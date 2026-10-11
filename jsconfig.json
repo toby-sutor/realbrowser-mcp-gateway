@@ -1,0 +1,15 @@
+{
+	"compilerOptions": {
+		"checkJs": true,
+		"allowJs": true,
+		"noEmit": true,
+		"strict": true,
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"target": "es2023",
+		"types": ["node", "firefox-webext-browser"],
+		"skipLibCheck": true
+	},
+	"include": ["daemon/", "extension/", "tests/", "tools/"],
+	"exclude": ["extension/vendor/"]
+}

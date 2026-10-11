@@ -1,0 +1,26 @@
+{
+	"name": "realbrowser-mcp-gateway",
+	"version": "0.1.9",
+	"license": "MIT",
+	"private": true,
+	"type": "module",
+	"description": "Lets AI agents read the web through your own real browser: pages, search and files, via a local daemon, a Firefox-family add-on and an MCP helper",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"test": "node --env-file-if-exists=.env.test --import ./tests/helpers/no-desktop.mjs --test --test-timeout=60000 \"tests/unit/**/*.test.js\"",
+		"lint": "find $(ls -d daemon extension tools tests 2>/dev/null) -type f -name '*.*js' -print0 | xargs -0 -n 1 node --check && python3 -c \"import ast; [ast.parse(open(f).read(), f) for f in ('cli/bgw', 'cli/bgw_daemonctl.py')]\" && tsc -p jsconfig.json",
+		"test:integration": "node --env-file-if-exists=.env.test --import ./tests/helpers/no-desktop.mjs --test --test-concurrency=1 --test-timeout=900000 \"tests/integration/**/*.test.js\"",
+		"xpi": "sh tools/build-xpi.sh"
+	},
+	"dependencies": {
+		"ws": "^8.18.3"
+	},
+	"devDependencies": {
+		"@types/firefox-webext-browser": "143.0.1",
+		"@types/node": "^24.0.0",
+		"@types/ws": "^8.18.1",
+		"typescript": "7.0.2"
+	}
+}

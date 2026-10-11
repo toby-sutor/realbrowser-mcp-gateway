@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.xpi
+.venv/
+__pycache__/
+*.log
+.env
+.env.*
+extension/dev-config.json
+web-ext-artifacts/
+.test-tmp/
