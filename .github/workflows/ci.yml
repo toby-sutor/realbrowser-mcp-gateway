@@ -1,0 +1,47 @@
+# Unit tests and lint on every push to main and every pull request.
+#
+# Not run here, on purpose: the integration suite (needs a Firefox and web-ext), the Chromium smoke suite and the D-Bus
+# notification suite. They need programs and a desktop-like environment that a
+# hosted runner does not give reliably. Run them by hand before a release; see
+# CONTRIBUTING.md.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer run of the same ref replaces a superseded one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24 is the minimum in package.json "engines"; 26 is the version developed on.
+        node: [24, 26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint (syntax checks, Python syntax, TypeScript check)
+        run: npm run lint
+      - name: Vendored bundle matches its lock file
+        run: node tools/vendor.mjs --check
+      - name: Unit tests
+        run: npm test
