@@ -1,0 +1,43 @@
+{
+	"manifest_version": 2,
+	"name": "RealBrowser MCP Gateway",
+	"version": "0.1.9",
+	"description": "Lets a local daemon on this computer ask this browser to load a page or file and hand back what it shows, for AI agents that read the web. Reads only; no clicking or typing. Runs in its own cookie container and window.",
+	"browser_specific_settings": {
+		"gecko": {
+			"id": "browser-gateway@localhost",
+			"strict_min_version": "140.0",
+			"data_collection_permissions": {
+				"required": ["none"]
+			}
+		}
+	},
+	"incognito": "not_allowed",
+	"background": {
+		"page": "background/background.html",
+		"persistent": true
+	},
+	"browser_action": {
+		"default_title": "Browser Gateway",
+		"default_popup": "popup/popup.html"
+	},
+	"options_ui": {
+		"page": "options/options.html",
+		"open_in_tab": true
+	},
+	"content_security_policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'",
+	"permissions": [
+		"tabs",
+		"webNavigation",
+		"webRequest",
+		"webRequestBlocking",
+		"<all_urls>",
+		"contextualIdentities",
+		"cookies",
+		"storage",
+		"notifications",
+		"dns",
+		"sessions",
+		"downloads"
+	]
+}

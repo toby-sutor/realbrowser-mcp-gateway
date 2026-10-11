@@ -1,0 +1,112 @@
+body {
+	font: 14px/1.5 system-ui, sans-serif;
+	margin: 0;
+	color: #222;
+	background: #fafafa;
+}
+
+main {
+	max-width: 46em;
+	margin: 2em auto;
+	padding: 0 1.5em;
+}
+
+h1 {
+	font-size: 1.5em;
+}
+
+#version {
+	font-weight: normal;
+	color: #666;
+	font-size: 0.7em;
+}
+
+h2 {
+	font-size: 1.1em;
+	margin-top: 2em;
+}
+
+dt {
+	float: left;
+	clear: left;
+	width: 8em;
+	color: #666;
+}
+
+dd {
+	margin: 0 0 4px 8.5em;
+	overflow-wrap: anywhere;
+}
+
+input {
+	font: inherit;
+}
+
+#code {
+	font-family: monospace;
+	max-width: 100%;
+}
+
+h3 {
+	font-size: 1em;
+	margin-top: 1.5em;
+}
+
+label {
+	display: inline-block;
+	min-width: 9em;
+}
+
+label.inline {
+	min-width: 0;
+}
+
+.facts li {
+	margin-bottom: 4px;
+}
+
+#optin-list {
+	list-style: none;
+	padding: 0;
+}
+
+#optin-list li {
+	display: flex;
+	gap: 8px;
+	align-items: baseline;
+	padding: 4px 0;
+	border-bottom: 1px solid #ddd;
+}
+
+#optin-list .rule {
+	flex: 1;
+	font-family: monospace;
+	overflow-wrap: anywhere;
+}
+
+#optin-list .off {
+	text-decoration: line-through;
+	color: #777;
+}
+
+.ok {
+	color: #0a6b2d;
+	font-weight: bold;
+}
+
+.bad {
+	color: #b3261e;
+	font-weight: bold;
+}
+
+@media (prefers-color-scheme: dark) {
+	body {
+		color: #ddd;
+		background: #1c1c1e;
+	}
+
+	dt,
+	#version {
+		color: #aaa;
+	}
+}

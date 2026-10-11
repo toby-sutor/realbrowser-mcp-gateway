@@ -1,0 +1,13 @@
+{
+	"package": "defuddle",
+	"version": "0.19.4",
+	"tarball": "https://registry.npmjs.org/defuddle/-/defuddle-0.19.4.tgz",
+	"integrity": "sha512-Jz98aWlyEeuWcg9u2AavCEKknviI9GijMkrGFPk0wi1Lkfr1DDDw6XM+ak44Ol8kBDmDJsvU9Su2eUY09Fvh3Q==",
+	"source_path": "package/dist/index.full.js",
+	"sha256": "af3405fbab6971f85ad9912f7b4dba4d0889900efe5d93638df7d3f23278ebc1",
+	"license": "MIT",
+	"license_source_path": "package/LICENSE",
+	"license_sha256": "c63e6774d9c9da3de01428e0809080c4758de3636c8e9e6fe51525c9ab4cd092",
+	"global": "Defuddle",
+	"date": "2026-10-05"
+}

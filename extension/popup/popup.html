@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Browser Gateway</title>
+	<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+	<h1>Browser Gateway <span id="version"></span></h1>
+	<dl>
+		<dt>Daemon</dt>
+		<dd id="link">...</dd>
+		<dt>Gateway</dt>
+		<dd id="paused">...</dd>
+		<dt>Current job</dt>
+		<dd id="job">-</dd>
+	</dl>
+	<p id="error" hidden></p>
+	<section id="pending" hidden>
+		<h2>Waiting for you</h2>
+		<p>These pages show a human check. Open one to deal with it; the gateway reads the page once the check is passed.</p>
+		<ul id="pending-list"></ul>
+	</section>
+	<div class="buttons">
+		<button id="pause" type="button">Pause</button>
+		<button id="reconnect" type="button">Reconnect</button>
+		<button id="options" type="button">Options</button>
+	</div>
+	<script src="popup.js"></script>
+</body>
+</html>

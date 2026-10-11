@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Browser Gateway options</title>
+	<link rel="stylesheet" href="options.css">
+</head>
+<body>
+	<main>
+		<h1>Browser Gateway <span id="version"></span></h1>
+
+		<section>
+			<h2>Connection</h2>
+			<dl>
+				<dt>Paired</dt>
+				<dd id="paired">...</dd>
+				<dt>Daemon</dt>
+				<dd id="link">...</dd>
+				<dt>Last error</dt>
+				<dd id="error">-</dd>
+			</dl>
+			<button id="reconnect" type="button">Reconnect</button>
+		</section>
+
+		<section>
+			<h2>Pair with the daemon</h2>
+			<p>Run <code>bgw pair</code> in a terminal and paste the code here. A code works once and expires after ten minutes.</p>
+			<p>
+				<label for="code">Pairing code</label>
+				<input id="code" type="text" size="60" maxlength="80" autocomplete="off" spellcheck="false">
+				<button id="pair" type="button">Pair</button>
+			</p>
+			<p id="pair-result" role="status"></p>
+			<p><button id="forget" type="button">Forget pairing</button></p>
+		</section>
+
+		<section>
+			<h2>Daemon port</h2>
+			<p>Pairing sets the port by itself. Change it here only if the daemon was moved.</p>
+			<p>
+				<label for="port">Port on 127.0.0.1</label>
+				<input id="port" type="number" min="1" max="65535" step="1">
+				<button id="save-port" type="button">Save</button>
+			</p>
+			<p id="port-result" role="status"></p>
+		</section>
+
+		<section id="container">
+			<h2>Gateway container</h2>
+			<p>The gateway loads pages in a container of its own, "Browser Gateway". That container keeps the cookies and site data of the sites the gateway visited: consent choices, checks that were passed. Nothing of your own logins is in it.</p>
+			<p><button id="container-clear" type="button">Clear the gateway container...</button></p>
+			<div id="container-confirm" hidden>
+				<p id="container-warning">This removes the container "Browser Gateway" with all its cookies and site data and puts a new, empty one in its place. Sites will see the gateway as a first-time visitor again: consent pages and human checks you already passed come back. Your own tabs, your logins and your other containers are not touched, and the login rules below stay as they are.</p>
+				<p>
+					<button id="container-clear-yes" type="button">Yes, clear it</button>
+					<button id="container-clear-no" type="button">Cancel</button>
+				</p>
+			</div>
+			<p id="container-result" role="status"></p>
+		</section>
+
+		<section id="optin">
+			<h2>Use my login on these sites</h2>
+			<p>The gateway loads every page in a container of its own, where you are not logged in to anything. A rule on this list changes that for one site:</p>
+			<ul class="facts">
+				<li>Pages under a rule are loaded with your own login: your cookies and your session, in a tab of the gateway window.</li>
+				<li>The agent can read whatever you can see there - private messages, account pages, anything behind the login that lies under the rule.</li>
+				<li>Loading a page can have side effects. On some sites opening an address marks something as read, casts a vote, unsubscribes or logs you out.</li>
+				<li>The site sees these visits as yours. Many automated visits can get an account limited or banned.</li>
+				<li>Such pages are handed to the agent once and are not stored on this computer.</li>
+			</ul>
+			<p>Add a rule only for a site and a path you would let the agent read as you, and keep the path as narrow as you can. A page that tries to go outside its rule is stopped. Each rule is used for at most one page every 10 seconds and 30 pages an hour. Accounts, webmail, payment and password-manager sites cannot be added. Rules can be changed on this page only.</p>
+			<p id="optin-state" role="status">...</p>
+			<ul id="optin-list"></ul>
+			<p id="optin-trouble" hidden>
+				<button id="optin-restore" type="button">Put the rules shown here in force</button>
+				<button id="optin-clear" type="button">Remove all rules</button>
+			</p>
+			<h3 id="optin-form-title">Add a rule</h3>
+			<p>
+				<label for="optin-host">Host</label>
+				<input id="optin-host" type="text" size="32" maxlength="300" autocomplete="off" spellcheck="false" placeholder="old.reddit.com">
+			</p>
+			<p>
+				<label for="optin-path">Path starts with</label>
+				<input id="optin-path" type="text" size="32" maxlength="300" autocomplete="off" spellcheck="false" value="/">
+			</p>
+			<p>
+				<input id="optin-subdomains" type="checkbox">
+				<label for="optin-subdomains" class="inline">Also every subdomain of this host</label>
+			</p>
+			<p>
+				<button id="optin-add" type="button">Add rule</button>
+				<button id="optin-cancel" type="button" hidden>Cancel</button>
+			</p>
+			<p id="optin-result" role="status"></p>
+		</section>
+	</main>
+	<script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+body {
+	font: 15px/1.5 system-ui, sans-serif;
+	margin: 0;
+	color: #222;
+	background: #f4f4f4;
+}
+
+main {
+	max-width: 36em;
+	margin: 4em auto;
+	padding: 0 1.5em;
+}
+
+h1 {
+	font-size: 1.4em;
+}
+
+@media (prefers-color-scheme: dark) {
+	body {
+		color: #ddd;
+		background: #1c1c1e;
+	}
+}

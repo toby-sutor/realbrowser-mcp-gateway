@@ -1,0 +1,96 @@
+body {
+	font: 13px/1.4 system-ui, sans-serif;
+	margin: 10px;
+	min-width: 280px;
+}
+
+h1 {
+	font-size: 14px;
+	margin: 0 0 8px;
+}
+
+#version {
+	font-weight: normal;
+	color: #666;
+}
+
+dl {
+	margin: 0;
+}
+
+dt {
+	float: left;
+	clear: left;
+	width: 90px;
+	color: #666;
+}
+
+dd {
+	margin: 0 0 4px 95px;
+	overflow-wrap: anywhere;
+}
+
+.ok {
+	color: #0a6b2d;
+	font-weight: bold;
+}
+
+.bad {
+	color: #b3261e;
+	font-weight: bold;
+}
+
+.warn {
+	color: #b06000;
+	font-weight: bold;
+}
+
+#error {
+	margin: 6px 0 0;
+	color: #b3261e;
+}
+
+.buttons {
+	margin-top: 10px;
+	display: flex;
+	gap: 6px;
+}
+
+#pending {
+	margin-top: 10px;
+	padding-top: 8px;
+	border-top: 1px solid #ccc;
+}
+
+#pending h2 {
+	font-size: 13px;
+	margin: 0 0 4px;
+	color: #b3261e;
+}
+
+#pending p {
+	margin: 0 0 6px;
+	color: #666;
+}
+
+#pending-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+#pending-list li {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 4px;
+}
+
+#pending-list .host {
+	flex: 1;
+	overflow-wrap: anywhere;
+}
+
+#pending-list .note {
+	color: #666;
+}
