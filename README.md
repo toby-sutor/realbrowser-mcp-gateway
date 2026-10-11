@@ -144,6 +144,8 @@ are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Install from source
 
+**TL;DR**: Point your AI agent against this repository and tell it to deploy the tool and make it available as a MCP server.
+
 About ten minutes. In short: get the source, start the daemon, install the
 add-on in the browser, pair the two with a one-time code, register the MCP
 server with your agent. You need the source tree even if you take the built
