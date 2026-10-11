@@ -1,0 +1,28 @@
+# Browser Gateway: the daemon's two directories. Installed by tools/install.sh
+# next to browser-gateway.service, which requires it and starts after it.
+#
+# browser-gateway.service mounts %h/.config/browser-gateway and
+# %h/.local/share/browser-gateway into an otherwise empty home directory
+# (ProtectHome=tmpfs, BindPaths=). A BindPaths source that is missing makes
+# that unit fail before the daemon runs, and the daemon cannot make them
+# itself: its mount namespace is set up first. With the units installed for
+# all users nobody else makes them either, so this unit does, for whoever
+# the service starts for. It has no sandbox of its own because it has to
+# write into the real home directory; all it runs is one mkdir.
+#
+# Chosen over a tmpfiles.d entry for users: that is applied at login only,
+# and only where the distribution enables it for user sessions. This unit
+# runs before every start of the daemon (no RemainAfterExit), so a directory
+# that was deleted meanwhile is made again.
+#
+# Not run under a real systemd so far: the install script and what it writes
+# are tested with a stand-in for systemctl (README.md says what was checked).
+[Unit]
+Description=Browser Gateway: make the daemon's config and data directory
+
+[Service]
+Type=oneshot
+# 0700 for the two directories, and for a parent that had to be made.
+UMask=0077
+NoNewPrivileges=yes
+ExecStart=/usr/bin/env mkdir -p -m 0700 %h/.config/browser-gateway %h/.local/share/browser-gateway

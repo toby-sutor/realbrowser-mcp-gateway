@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The lighthouse keeper's log - Harbour Notes</title><meta property="og:site_name" content="Harbour Notes">
+<script>
+// A window has a property for every frame under the name the page gave it. These three are the names a
+// script bundle looks for to find out how it is being loaded. They are made here, in the head, so that
+// they are there before any script that is loaded after this one.
+for (const name of ["exports", "module", "define"]) {
+	const frame = document.createElement("iframe");
+	frame.name = name;
+	frame.width = "10";
+	frame.height = "10";
+	frame.title = name;
+	document.documentElement.appendChild(frame);
+}
+</script>
+</head>
+<body>
+<article>
+<h1>The lighthouse keeper's log</h1>
+<p>UMDVIS-MAIN The lamp was lit at a quarter past five and burned until the fog lifted the next morning. Three trawlers passed the point before midnight, the last of them so close that the keeper could read the name on her bow by the light of his own lantern.</p>
+<p>In the morning the glass was wiped, the wick trimmed and the oil measured: a little under four pints had gone. The entry was signed, and the book put back on its shelf beside the barometer. UMDVIS-END</p>
+</article>
+</body>
+</html>

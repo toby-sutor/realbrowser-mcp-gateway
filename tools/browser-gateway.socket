@@ -1,0 +1,21 @@
+# Browser Gateway: the daemon's port, held by systemd. A template:
+# tools/install.sh puts in the port.
+#
+# Clients send a bearer token to the daemon on 127.0.0.1:@PORT@. With this
+# unit the port is taken from login on, before the daemon runs and while it
+# restarts, so no other process can sit on it and collect tokens. The daemon
+# is started on the first connection and handed this socket; it checks that
+# the socket is 127.0.0.1:@PORT@ and refuses anything else.
+[Unit]
+Description=Browser Gateway daemon socket (127.0.0.1:@PORT@)
+
+[Socket]
+ListenStream=127.0.0.1:@PORT@
+# Keep holding the port when the daemon cannot start (a broken config.json,
+# say): a connection that found no daemon is dropped instead of starting it
+# over and over, and no number of connections makes systemd give the port up.
+FlushPending=yes
+TriggerLimitIntervalSec=0
+
+[Install]
+WantedBy=sockets.target

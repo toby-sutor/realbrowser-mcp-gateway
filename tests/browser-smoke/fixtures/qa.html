@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>How do I load a script only after the page has rendered? - Stack Example</title>
+<meta property="og:site_name" content="Stack Example">
+<style>
+#sidebar { float: right; width: 220px }
+table { border-collapse: collapse } td, th { border: 1px solid #999; padding: 2px 6px }
+</style>
+</head>
+<body>
+<header class="top-bar"><a href="/">QA-TOPBAR Stack Example</a> <a href="/questions">QA-TOPBAR Questions</a> <a href="/tags">QA-TOPBAR Tags</a> <a href="/users">QA-TOPBAR Users</a></header>
+<div id="content">
+<div id="question-header"><h1>How do I load a script only after the page has rendered?</h1></div>
+<div id="sidebar"><h4>Related</h4><ul><li><a href="/q/101">QA-SIDEBAR Why is my page slow to paint?</a></li><li><a href="/q/102">QA-SIDEBAR Difference between async and defer</a></li></ul></div>
+<div id="mainbar">
+<div class="question" id="question">
+<div class="votecell">QA-VOTES 42</div>
+<div class="postcell">
+<div class="s-prose js-post-body">
+<p>QAQUESTION-MAIN I have a page that includes a tracking snippet with <code>&lt;script src="tracker.js"&gt;&lt;/script&gt;</code> in the head, and it delays the first paint by several hundred milliseconds. The page also embeds a video in an <code>&lt;iframe&gt;</code> and carries a small <code>&lt;style&gt;</code> block. This is the whole document:</p>
+<pre><code class="language-html">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+  &lt;!-- the tracker --&gt;
+  &lt;style&gt;body { margin: 0 }&lt;/style&gt;
+  &lt;script src="tracker.js"&gt;&lt;/script&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;iframe src="https://video.example.org/embed/42" width="560" height="315"&gt;&lt;/iframe&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+<p>What is the right way to keep the tracker from blocking rendering, without moving it to the end of the body by hand on every page of the site?</p>
+</div>
+<div class="post-taglist"><a href="/tags/javascript">javascript</a> <a href="/tags/html">html</a> <a href="/tags/performance">performance</a></div>
+<div class="user-info">asked by <a href="/users/1/quokka-dev">quokka_dev</a></div>
+</div>
+<div class="comments"><ul><li>QACOMMENT-ONE Have you measured it with the network panel throttled? A cached <code>tracker.js</code> may not be the problem at all.</li></ul></div>
+</div>
+<div id="answers">
+<h2>2 Answers</h2>
+<div class="answer accepted-answer" id="answer-1">
+<div class="votecell">QA-VOTES 57</div>
+<div class="answercell">
+<div class="s-prose js-post-body">
+<p>QAANSWER-ONE Add the <code>defer</code> attribute. A <code>&lt;script defer&gt;</code> is fetched in parallel and runs after the document has been parsed, in order, so nothing else has to move. The frame can wait as well:</p>
+<pre><code class="language-html">&lt;script defer src="tracker.js"&gt;&lt;/script&gt;
+&lt;iframe loading="lazy" src="https://video.example.org/embed/42"&gt;&lt;/iframe&gt;</code></pre>
+<p>How the two attributes differ:</p>
+<table>
+<thead><tr><th>Attribute</th><th>Fetch</th><th>Runs</th></tr></thead>
+<tbody>
+<tr><td>none</td><td>blocks parsing</td><td>at once</td></tr>
+<tr><td>async</td><td>in parallel</td><td>as soon as it arrives</td></tr>
+<tr><td>defer</td><td>in parallel</td><td>after parsing, in order</td></tr>
+</tbody>
+</table>
+</div>
+<div class="user-info">answered by <a href="/users/2/fennec42">fennec42</a></div>
+</div>
+</div>
+<div class="answer" id="answer-2">
+<div class="votecell">QA-VOTES 12</div>
+<div class="answercell">
+<div class="s-prose js-post-body">
+<p>QAANSWER-TWO If you cannot change the markup, insert the element from JavaScript once the page has loaded. Note that the string <code>"&lt;script&gt;"</code> below is only text:</p>
+<pre><code class="language-js">window.addEventListener("load", () =&gt; {
+  const s = document.createElement("script");
+  s.src = "tracker.js";
+  s.async = true;
+  document.head.appendChild(s);
+  if (a &lt; b &amp;&amp; c &gt; d) console.log("&lt;script&gt; injected");
+});</code></pre>
+<p>This costs one more round trip than <code>defer</code>, so prefer the attribute where you can.</p>
+</div>
+<div class="user-info">answered by <a href="/users/3/otter-ops">otter_ops</a></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<footer>QA-FOOTER Site design and logo are examples. User contributions are fixtures.</footer>
+</body>
+</html>

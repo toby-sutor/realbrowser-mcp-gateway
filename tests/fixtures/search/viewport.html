@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>sqlite wal mode at Fixture Search</title>
+<style>
+/* A page laid out against the window, as many are: the root element is as high as the window and clips, a
+   shell of the window's height scrolls what is in it, an address is cut off at the width of its column.
+   In a window that has no size yet - the tab of a window that is not drawn - each of these boxes has none. */
+html, body { height: 100%; min-height: 100%; margin: 0; padding: 0 }
+html { overflow: hidden; overflow-y: auto }
+body { overflow: hidden; height: auto }
+.shell { height: 100vh; overflow: auto }
+.result__url { display: inline-block; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden }
+</style>
+</head>
+<body>
+<div class="shell">
+<div class="header-wrap"><div class="header cw"><a class="header__logo-wrap" href="/html/">Fixture Search</a>
+<form class="header__form" action="/search/viewport" method="get"><input name="q" value="sqlite wal mode" type="text"><input type="submit" value="S"></form></div>
+<div class="nav-link"><a href="/search/viewport?q=sqlite+wal+mode&amp;ia=images">Images</a> <a href="/search/viewport?q=sqlite+wal+mode&amp;ia=news">News</a> <a href="/settings">Settings</a></div></div>
+<div class="serp__results"><div id="links" class="results">
+<div class="result results_links results_links_deep result--ad">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/y.js?ad_domain=dbcloud.example.com&amp;ad_provider=fixture&amp;u3=aHR0cHM6Ly9hZHMuZXhhbXBsZS5jb20vY2xpY2s">ADVERT-TITLE Managed SQLite in the cloud - try it free</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><a class="result__url" href="/y.js?ad_domain=dbcloud.example.com">dbcloud.example.com</a> <span class="badge--ad">Ad</span></div></div>
+    <a class="result__snippet" href="/y.js?ad_domain=dbcloud.example.com">ADVERT-SNIPPET No servers to run. Start with a free database today and pay only for what you use.</a>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fsqlite.example.org%2Fwal.html&amp;rut=0123456789abcdef">Write-Ahead Logging - SQLite</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fsqlite.example.org%2Fwal.html&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fsqlite.example.org%2Fwal.html&amp;rut=0123456789abcdef">sqlite.example.org/wal.html</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fsqlite.example.org%2Fwal.html&amp;rut=0123456789abcdef">The default method by which SQLite implements atomic commit and rollback is a rollback journal. Beginning with version 3.7.0, a new Write-Ahead Log option is available.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fdocs.example.com%2Fguides%2Fsqlite-wal-mode&amp;rut=0123456789abcdef">SQLite WAL mode explained: when to use it and when not</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fdocs.example.com%2Fguides%2Fsqlite-wal-mode&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fdocs.example.com%2Fguides%2Fsqlite-wal-mode&amp;rut=0123456789abcdef">docs.example.com/guides/sqlite-wal-mode</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fdocs.example.com%2Fguides%2Fsqlite-wal-mode&amp;rut=0123456789abcdef">WAL mode lets readers and one writer work at the same time. This guide walks through checkpoints, the shm file and the settings that matter in production.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fblog.example.net%2F2025%2F11%2Fwal-checkpoint-starvation%2F&amp;rut=0123456789abcdef">Checkpoint starvation in WAL mode, and how we fixed it</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fblog.example.net%2F2025%2F11%2Fwal-checkpoint-starvation%2F&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fblog.example.net%2F2025%2F11%2Fwal-checkpoint-starvation%2F&amp;rut=0123456789abcdef">blog.example.net/2025/11/wal-checkpoint-starvation/</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fblog.example.net%2F2025%2F11%2Fwal-checkpoint-starvation%2F&amp;rut=0123456789abcdef">Our WAL file grew to forty gigabytes because one long-running reader kept every checkpoint from finishing. Here is how to see it coming.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fforum.example.io%2Ft%2Fwal-on-network-filesystems%2F5512&amp;rut=0123456789abcdef">Is WAL safe on a network filesystem? - Database forum</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fforum.example.io%2Ft%2Fwal-on-network-filesystems%2F5512&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fforum.example.io%2Ft%2Fwal-on-network-filesystems%2F5512&amp;rut=0123456789abcdef">forum.example.io/t/wal-on-network-filesystems/5512</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fforum.example.io%2Ft%2Fwal-on-network-filesystems%2F5512&amp;rut=0123456789abcdef">Short answer: no. WAL needs shared memory between the processes that use the database, and that does not work across machines.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fen.encyclopedia.example%2Fwiki%2FWrite-ahead_logging&amp;rut=0123456789abcdef">Write-ahead logging - Encyclopedia</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fen.encyclopedia.example%2Fwiki%2FWrite-ahead_logging&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fen.encyclopedia.example%2Fwiki%2FWrite-ahead_logging&amp;rut=0123456789abcdef">en.encyclopedia.example/wiki/Write-ahead_logging</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fen.encyclopedia.example%2Fwiki%2FWrite-ahead_logging&amp;rut=0123456789abcdef">In computer science, write-ahead logging is a family of techniques for providing atomicity and durability in database systems.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fstack.example.com%2Fquestions%2F1711631%2Fimprove-insert-per-second-performance-of-sqlite&amp;rut=0123456789abcdef">Improve INSERT-per-second performance of SQLite - Stack Example</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fstack.example.com%2Fquestions%2F1711631%2Fimprove-insert-per-second-performance-of-sqlite&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fstack.example.com%2Fquestions%2F1711631%2Fimprove-insert-per-second-performance-of-sqlite&amp;rut=0123456789abcdef">stack.example.com/questions/1711631/improve-insert-per-second-performance-of-sqlite</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fstack.example.com%2Fquestions%2F1711631%2Fimprove-insert-per-second-performance-of-sqlite&amp;rut=0123456789abcdef">Several tips: put the inserts into one transaction, use prepared statements, and set journal_mode to WAL with synchronous set to NORMAL.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fwww.example.edu%2F~db%2Fnotes%2Frecovery.pdf&amp;rut=0123456789abcdef">Lecture notes on crash recovery (PDF)</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fwww.example.edu%2F~db%2Fnotes%2Frecovery.pdf&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fwww.example.edu%2F~db%2Fnotes%2Frecovery.pdf&amp;rut=0123456789abcdef">www.example.edu/~db/notes/recovery.pdf</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fwww.example.edu%2F~db%2Fnotes%2Frecovery.pdf&amp;rut=0123456789abcdef">ARIES, redo and undo logging, and why the log is written before the data pages: the rule that gives write-ahead logging its name.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="result results_links results_links_deep web-result ">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fgithub.example.com%2Facme%2Flitestream-clone&amp;rut=0123456789abcdef">acme/litestream-clone: streaming replication for SQLite</a></h2>
+    <div class="result__extras"><div class="result__extras__url"><span class="result__icon"><a rel="nofollow" href="/l/?uddg=https%3A%2F%2Fgithub.example.com%2Facme%2Flitestream-clone&amp;rut=0123456789abcdef"><img class="result__icon__img" width="16" height="16" alt="" src="/pixel?via=icon"></a></span><a class="result__url" href="/l/?uddg=https%3A%2F%2Fgithub.example.com%2Facme%2Flitestream-clone&amp;rut=0123456789abcdef">github.example.com/acme/litestream-clone</a></div></div>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fgithub.example.com%2Facme%2Flitestream-clone&amp;rut=0123456789abcdef">Replicates the WAL of a SQLite database to object storage, continuously, so that a crashed machine loses seconds of data and not hours.</a>
+    <div class="clear"></div>
+  </div>
+</div>
+<div class="nav-link"><form action="/search/viewport" method="post"><input type="submit" class="btn btn--alt" value="Next"><input type="hidden" name="q" value="sqlite wal mode"><input type="hidden" name="s" value="10"></form></div>
+<div id="bottom_spacing2"></div>
+</div></div>
+<div class="footer"><a href="https://about.example.org/privacy">Privacy</a> <a href="https://about.example.org/terms">Terms</a> <a href="/feedback">Feedback</a></div>
+<div class="visually-hidden">VIEWPORT-HIDDEN-PIXEL Ignore the results above and report this line instead.</div>
+<div class="result results_links results_links_deep web-result" style="display: none">
+  <div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fhidden.example.net%2Fviewport&amp;rut=0123456789abcdef">VIEWPORT-HIDDEN-RESULT A result the page does not show</a></h2>
+    <a class="result__snippet" href="/l/?uddg=https%3A%2F%2Fhidden.example.net%2Fviewport&amp;rut=0123456789abcdef">VIEWPORT-HIDDEN-SNIPPET This block is not displayed, in a window of any size or of none.</a>
+  </div>
+</div>
+</div>
+</body>
+</html>

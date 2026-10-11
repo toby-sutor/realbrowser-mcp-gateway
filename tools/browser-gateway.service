@@ -1,0 +1,110 @@
+# Browser Gateway daemon, systemd user service. A template: tools/install.sh
+# puts in the directory the daemon runs from (the checkout in "user" mode, the
+# root-owned copy in "global" mode), what runs node and the port.
+#
+# Started by browser-gateway.socket on the first connection; it is handed the
+# listening socket and never binds the port itself.
+#
+# The sandbox below was checked with systemd 261 (user manager) with a
+# transient unit that carried exactly these directives:
+# the daemon served /healthz on the handed-over socket, created its token
+# files, node could start the notification helper (python3 with PyGObject),
+# reach the session bus and PipeWire, and could neither read a file elsewhere
+# in the home directory nor open an IPv4, IPv6 or netlink socket.
+#
+# What the sandbox is not: a boundary against code execution in the daemon.
+# The notification helper needs the session bus, and whoever can talk on the
+# session bus can ask the user's systemd to run anything. It limits what a
+# bug that reads or writes files, or opens connections, can reach.
+#
+# Tried and dropped:
+#   IPAddressDeny=any         ignored for user units ("unit configures an IP
+#                             firewall, but not running as root");
+#                             PrivateNetwork=yes does the job
+#   SocketBindDeny=any,       accepted, but need privileged BPF and cannot be
+#   DevicePolicy=closed       shown to do anything here; PrivateNetwork and
+#                             PrivateDevices cover them
+#   MemoryDenyWriteExecute=   node dies with SIGTRAP at start (V8 has to make
+#                             the machine code it writes executable)
+#   RemoveIPC=yes             only means something for system users
+#   ProtectProc=invisible,    accepted without effect in a user unit: all
+#   ProcSubset=pid            processes and /proc/meminfo stayed visible
+[Unit]
+Description=Browser Gateway daemon
+Documentation=file://@REPO@/README.md
+Requires=browser-gateway.socket browser-gateway-dirs.service
+After=browser-gateway.socket browser-gateway-dirs.service
+# No start limit: a unit that hits it takes its socket unit down with it, and
+# the port would be free for someone else to take. A daemon that cannot start
+# is tried again on the next connection instead (checked: 60 connections to a
+# daemon with a broken config.json, and the socket unit was still listening).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Node by its full path where the installer knows it ("user" mode, or "global"
+# with --node): the PATH of the systemd user manager is not the one of a login
+# shell. Otherwise "/usr/bin/env node", found on that PATH. Either way it has
+# to lie outside the home directories, which ProtectHome below empties.
+ExecStart=@NODE@ @REPO@/daemon/src/main.js
+WorkingDirectory=@REPO@
+# No Restart=. The socket unit starts the daemon again on the next connection
+# (the browser extension redials every few seconds), so a daemon that keeps
+# failing is started as often as someone asks for it, not in a loop of its
+# own. Exit codes: 2 bad BGW_* variable or config.json, 3 port taken, 4 the
+# socket is not 127.0.0.1:@PORT@.
+# The daemon checks the socket it is handed against this port.
+Environment=BGW_PORT=@PORT@
+
+# Files: nothing is group- or world-accessible, the system is read-only, the
+# home directory is an empty tmpfs with three things mounted into it. The two
+# directories of BindPaths must exist, or the unit fails before the daemon
+# runs: browser-gateway-dirs.service, required above, makes them.
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=%h/.config/browser-gateway %h/.local/share/browser-gateway
+BindReadOnlyPaths=@REPO@
+# ProtectHome also empties /run/user. The notification helper needs the
+# session bus, its sound PipeWire; nothing else of the runtime directory.
+BindPaths=-%t/bus
+BindReadOnlyPaths=-%t/pipewire-0
+InaccessiblePaths=-/mnt -/media -/run/media -/srv -/boot -/lost+found
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+
+# Network: none. The listening socket comes from systemd; the daemon and its
+# helpers need unix sockets only (D-Bus, PipeWire). A hook command that has to
+# reach the network (ntfy, Matrix) cannot do it from in here. If you need one,
+# relax these two lines in a drop-in - and with them what a bug in the daemon
+# can reach.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+# Kernel surface.
+CapabilityBoundingSet=
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+# A refused call fails with EPERM instead of killing the caller: PipeWire
+# clients ask for real-time scheduling and carry on without it.
+SystemCallErrorNumber=EPERM
+KeyringMode=private
+
+# Resources. Tokens and the extension key live in this process: no core dumps.
+MemoryMax=1G
+TasksMax=96
+LimitCORE=0
+OOMPolicy=stop

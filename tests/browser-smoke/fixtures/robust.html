@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>The market square - Harbour Notes</title><meta property="og:site_name" content="Harbour Notes">
+<script>
+// Before the page is read the ordinary way, two things are tried that no ordinary page does, and what
+// came of them is left for whoever asks (window.__bgwFixtureNotes). The page is as it was afterwards.
+addEventListener("DOMContentLoaded", () => {
+	const notes = {};
+	// The page takes its root element away, as a page can at any moment, and is read right then.
+	const root = document.documentElement;
+	root.remove();
+	try {
+		const r = __bgwExtract({ markdown: true, text: true, html: true, links: true, rawHtml: true });
+		notes.rootless = { ok: r.ok, markdown: r.content.markdown, html: r.content.html, raw: r.content.raw_html, links: r.content.links.length, lang: r.page.lang, view: r.extraction.view, extractor: r.page.extractor };
+	} catch (e) {
+		notes.rootless = { threw: String(e) };
+	}
+	document.appendChild(root);
+	// A page that is one form with a great many things in it, handed to the step that unwraps forms.
+	try {
+		const doc = __bgwExtract.internals.scrub("<form action='/post'><p>BIGFORM-FIRST</p>" + "<i>x</i>y".repeat(150000) + "<p>BIGFORM-LAST</p></form><select><option>BIGFORM-CONTROL</option></select>", document.baseURI, true);
+		const text = doc.body.textContent;
+		notes.bigform = { forms: doc.querySelectorAll("form").length, nodes: doc.body.childNodes.length, first: text.startsWith("BIGFORM-FIRST"), last: text.endsWith("BIGFORM-LAST"), length: text.length };
+	} catch (e) {
+		notes.bigform = { threw: String(e) };
+	}
+	window.__bgwFixtureNotes = notes;
+});
+</script>
+</head>
+<body>
+<article>
+<h1>The market square</h1>
+<p>ROBUSTVIS-MAIN On Saturdays the square fills before seven. The cheese stall stands where it has stood for forty years, between the fountain and the steps of the town hall, and the woman who runs it knows most of her customers by the bread they carry.</p>
+<p>By noon the crates are stacked again and the pigeons have the cobbles to themselves. The sweeper comes at one, and by two there is nothing left to show that anything was sold here at all. ROBUSTVIS-END</p>
+</article>
+</body>
+</html>
