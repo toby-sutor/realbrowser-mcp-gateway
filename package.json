@@ -19,7 +19,7 @@
 	},
 	"devDependencies": {
 		"@types/firefox-webext-browser": "143.0.1",
-		"@types/node": "^24.0.0",
+		"@types/node": "^26.6.5",
 		"@types/ws": "^8.18.1",
 		"typescript": "7.0.2"
 	}
