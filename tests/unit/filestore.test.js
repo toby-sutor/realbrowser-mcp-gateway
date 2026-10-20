@@ -11,6 +11,9 @@ import { FILE_ID_RE, PageStore, StoreError, isValidFileId, isValidPageId, newFil
 import { FILE_LIMITS, decodeText, displayName, exportEnding, isSafeName, xmlIsPlain } from "../../daemon/src/files.js";
 import { counterBytes, makeRecord, openStore, quietLog } from "../helpers/pages.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 const MIN = 60000;
 // What a store is given when it is told nothing: 2 GiB for all files, and a minute for a reader that stays away
 // (store.js FILE_STORE; a test in config-files.test.js holds the first to the documented default).
@@ -220,7 +223,7 @@ test("saveFile: the bytes are moved under a path made of the id alone, next to a
 	const d = fileDir(dir, id);
 	assert.deepEqual(fs.readdirSync(d).sort(), ["data", "meta.json"]);
 	assert.equal(fs.readFileSync(path.join(d, "data")).equals(PDF), true, "byte for byte");
-	assert.deepEqual([mode(path.join(d, "data")), mode(path.join(d, "meta.json")), mode(d), mode(path.dirname(d)), mode(path.join(dir, "files"))], [0o600, 0o600, 0o700, 0o700, 0o700]);
+	if (MODES) assert.deepEqual([mode(path.join(d, "data")), mode(path.join(d, "meta.json")), mode(d), mode(path.dirname(d)), mode(path.join(dir, "files"))], [0o600, 0o600, 0o700, 0o700, 0o700]);
 	assert.equal(fs.existsSync(rec.tempPath), false, "moved, not copied");
 	// The name is a field of the record. Nowhere on disk is anything called by it.
 	const everything = fs.readdirSync(dir, { recursive: true }).map(String);
@@ -345,10 +348,13 @@ test("saveFile refuses what it cannot trust: bytes from outside the data directo
 	t.after(() => fs.rmSync(outside, { force: true }));
 	assert.throws(() => store.saveFile(arrived(dir, PDF, { tempPath: outside })), StoreError);
 	assert.equal(fs.readFileSync(outside).equals(PDF), true, "left where it was");
-	const link = path.join(dir, "incoming", "j_link.part");
-	fs.mkdirSync(path.dirname(link), { recursive: true });
-	fs.symlinkSync(outside, link);
-	assert.throws(() => store.saveFile(arrived(dir, PDF, { tempPath: link })), StoreError);
+	// Windows makes no symlink without a privilege.
+	if (process.platform !== "win32") {
+		const link = path.join(dir, "incoming", "j_link.part");
+		fs.mkdirSync(path.dirname(link), { recursive: true });
+		fs.symlinkSync(outside, link);
+		assert.throws(() => store.saveFile(arrived(dir, PDF, { tempPath: link })), StoreError);
+	}
 	assert.throws(() => store.saveFile(arrived(dir, PDF, { size: PDF.length + 1 })), StoreError);
 	assert.throws(() => store.saveFile(arrived(dir, PDF, { sha256: "nope" })), StoreError);
 	assert.throws(() => store.saveFile(arrived(dir, PDF, { sniffed_type: "application/x-made-up" })), StoreError);
@@ -419,9 +425,12 @@ test("a record or bytes that were tampered with are not trusted", (t) => {
 	fs.appendFileSync(data, "x");
 	assert.equal(store.readFileChunk(id, 0, 10), null);
 	fs.rmSync(data);
-	fs.symlinkSync("/etc/hostname", data);
-	assert.equal(store.readFileChunk(id, 0, 10), null);
-	fs.rmSync(data);
+	// Windows makes no symlink without a privilege.
+	if (process.platform !== "win32") {
+		fs.symlinkSync("/etc/hostname", data);
+		assert.equal(store.readFileChunk(id, 0, 10), null);
+		fs.rmSync(data);
+	}
 	assert.equal(store.readFileChunk(id, 0, 10), null);
 });
 
@@ -473,15 +482,18 @@ test("purge removes old files like old pages: bytes, record, row and search entr
 	// A row whose directory is gone goes too; a link in the place of a directory is left alone, and said.
 	fs.rmSync(fileDir(dir, young.id), { recursive: true });
 	const linked = store.saveFile(arrived(dir, PDF));
-	const elsewhere = path.join(dir, "elsewhere");
-	fs.mkdirSync(elsewhere);
-	fs.writeFileSync(path.join(elsewhere, "keep"), "x");
-	fs.rmSync(fileDir(dir, linked.id), { recursive: true });
-	fs.symlinkSync(elsewhere, fileDir(dir, linked.id));
-	assert.deepEqual(store.purge({ maxAgeMs: 0 }), { rows: 0, dirs: 0, refused: 0, files: 0, unknown: 0 }, "nothing is strictly older than now");
-	clock.advance(1000);
-	assert.deepEqual(store.purge({ maxAgeMs: 0 }), { rows: 0, dirs: 0, refused: 1, files: 1, unknown: 0 });
-	assert.equal(fs.readFileSync(path.join(elsewhere, "keep"), "utf8"), "x", "what the link points at is untouched");
+	// Windows makes no symlink without a privilege.
+	if (process.platform !== "win32") {
+		const elsewhere = path.join(dir, "elsewhere");
+		fs.mkdirSync(elsewhere);
+		fs.writeFileSync(path.join(elsewhere, "keep"), "x");
+		fs.rmSync(fileDir(dir, linked.id), { recursive: true });
+		fs.symlinkSync(elsewhere, fileDir(dir, linked.id));
+		assert.deepEqual(store.purge({ maxAgeMs: 0 }), { rows: 0, dirs: 0, refused: 0, files: 0, unknown: 0 }, "nothing is strictly older than now");
+		clock.advance(1000);
+		assert.deepEqual(store.purge({ maxAgeMs: 0 }), { rows: 0, dirs: 0, refused: 1, files: 1, unknown: 0 });
+		assert.equal(fs.readFileSync(path.join(elsewhere, "keep"), "utf8"), "x", "what the link points at is untouched");
+	}
 });
 
 test("rebuildIndex brings files back from their directories: rows, search and stats; what is damaged is skipped", (t) => {
@@ -556,7 +568,7 @@ test("the same bytes are kept once: every record that holds them is a name for o
 		assert.deepEqual(fs.readdirSync(fileDir(dir, id)).sort(), ["data", "meta.json"]);
 		assert.equal(fs.readFileSync(path.join(fileDir(dir, id), "data")).equals(PDF), true);
 		assert.equal(store.readFileChunk(id, 0, FILE_LIMITS.exportChunkBytes)?.equals(PDF), true);
-		assert.equal(bytesOf(dir, id).mode & 0o777, 0o600);
+		if (MODES) assert.equal(bytesOf(dir, id).mode & 0o777, 0o600);
 	}
 	assert.deepEqual([bytesOf(dir, b.id).ino, bytesOf(dir, c.id).ino], [bytesOf(dir, a.id).ino, bytesOf(dir, a.id).ino], "one file under three names");
 	assert.equal(bytesOf(dir, a.id).nlink, 3);

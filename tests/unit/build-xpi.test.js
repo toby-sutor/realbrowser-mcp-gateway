@@ -15,6 +15,7 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(REPO, "extension", "manifes
 
 /** @returns {string | false} why the tests cannot run here */
 function skipReason() {
+	if (process.platform === "win32") return "a POSIX shell script";
 	for (const tool of ["sh", "python3", "git"]) {
 		if (spawnSync(tool, ["--version"], { stdio: "ignore" }).error !== undefined) return `${tool} is not available`;
 	}

@@ -3,7 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import zlib from "node:zlib";
 import { DatabaseSync } from "node:sqlite";
-import { ensurePrivateDir } from "./config.js";
+import { ensurePrivateDir, openNoFollow, removeLeftover, renameWithRetry } from "./config.js";
 import { normalizeUrl } from "../../extension/shared/policy.js";
 import { EXTRACTION_VIEWS, LIMITS as WIRE } from "../../extension/shared/protocol.js";
 import { SNIFFED_TYPES } from "../../extension/shared/sniff.js";
@@ -282,7 +282,7 @@ function settledType(file, sniffed, size) {
 	/** @type {number} */
 	let fd;
 	try {
-		fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+		fd = openNoFollow(file, fs.constants.O_RDONLY);
 	} catch {
 		throw new StoreError("invalid_record", "the bytes of the file cannot be read");
 	}
@@ -318,7 +318,7 @@ function readRegularFile(file) {
 	/** @type {number} */
 	let fd;
 	try {
-		fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+		fd = openNoFollow(file, fs.constants.O_RDONLY);
 	} catch (err) {
 		const code = /** @type {NodeJS.ErrnoException} */ (err).code;
 		if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") return null;
@@ -359,7 +359,7 @@ function sha256OfFile(file, size) {
 	/** @type {number} */
 	let fd;
 	try {
-		fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+		fd = openNoFollow(file, fs.constants.O_RDONLY);
 	} catch {
 		return null;
 	}
@@ -939,9 +939,9 @@ export class PageStore {
 			try {
 				for (const [name, data] of parts) writeNewFile(path.join(tmp, name), data);
 				writeNewFile(path.join(tmp, "meta.json"), metaData);
-				fs.renameSync(tmp, finalDir);
+				renameWithRetry(tmp, finalDir);
 			} catch (err) {
-				fs.rmSync(tmp, { recursive: true, force: true });
+				removeLeftover(tmp, { recursive: true, force: true });
 				const code = /** @type {NodeJS.ErrnoException} */ (err).code;
 				if (code === "EEXIST" || code === "ENOTEMPTY") {
 					lastErr = err;
@@ -1347,12 +1347,12 @@ export class PageStore {
 					}
 				}
 				// Same file system (both lie in the data directory): the bytes are moved, not copied, and never half there.
-				if (!linked) fs.renameSync(source, data);
+				if (!linked) renameWithRetry(source, data);
 				fs.chmodSync(data, 0o600);
 				writeNewFile(path.join(tmp, "meta.json"), JSON.stringify(meta, null, "\t") + "\n");
-				fs.renameSync(tmp, finalDir);
+				renameWithRetry(tmp, finalDir);
 			} catch (err) {
-				fs.rmSync(tmp, { recursive: true, force: true });
+				removeLeftover(tmp, { recursive: true, force: true });
 				const code = /** @type {NodeJS.ErrnoException} */ (err).code;
 				if ((code === "EEXIST" || code === "ENOTEMPTY") && lstatOrNull(source) !== null) {
 					lastErr = err;
@@ -1426,7 +1426,7 @@ export class PageStore {
 		/** @type {number} */
 		let fd;
 		try {
-			fd = fs.openSync(path.join(dir, "data"), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+			fd = openNoFollow(path.join(dir, "data"), fs.constants.O_RDONLY);
 		} catch (err) {
 			const code = /** @type {NodeJS.ErrnoException} */ (err).code;
 			if (code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR") return null;
@@ -1765,11 +1765,11 @@ export class PageStore {
 				const tmp = path.join(file.dir, `.link-${crypto.randomBytes(6).toString("hex")}`);
 				try {
 					fs.linkSync(path.join(first.dir, "data"), tmp);
-					fs.renameSync(tmp, data);
+					renameWithRetry(tmp, data);
 					file.content = key;
 					relinked++;
 				} catch {
-					fs.rmSync(tmp, { force: true });
+					removeLeftover(tmp, { force: true });
 				}
 			}
 		}

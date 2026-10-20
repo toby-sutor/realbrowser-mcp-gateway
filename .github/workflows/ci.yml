@@ -1,4 +1,4 @@
-# Unit tests and lint on every push to main and every pull request.
+# Unit tests and lint on every push to main and every pull request, unit tests on Windows as well.
 #
 # Not run here, on purpose: the integration suite (needs a Firefox and web-ext), the Chromium smoke suite and the D-Bus
 # notification suite. They need programs and a desktop-like environment that a
@@ -41,6 +41,41 @@ jobs:
         run: npm ci
       - name: Lint (syntax checks, Python syntax, TypeScript check)
         run: npm run lint
+      - name: Vendored bundle matches its lock file
+        run: node tools/vendor.mjs --check
+      - name: Unit tests
+        run: npm test
+
+  # The daemon, bgw and bgw mcp on native Windows. Lint stays on Linux (it uses find and xargs); tests that only make
+  # sense on a POSIX system are skipped there by the tests themselves.
+  windows:
+    name: unit on windows (node ${{ matrix.node }}, python ${{ matrix.python }})
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Python bgw takes with the oldest Node, the newest with the newest.
+        include:
+          - node: 24
+            python: "3.9"
+          - node: 26
+            python: "3.13"
+    env:
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
       - name: Vendored bundle matches its lock file
         run: node tools/vendor.mjs --check
       - name: Unit tests

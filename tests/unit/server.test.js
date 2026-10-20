@@ -13,6 +13,9 @@ import { ConfigError, LIMITS } from "../../daemon/src/config.js";
 import { PageStore } from "../../daemon/src/store.js";
 import { describeFault, exitOnFault, start } from "../../daemon/src/server.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 const DAY = 86400000;
 const T0 = Date.UTC(2026, 9, 5, 19, 44, 2);
 
@@ -155,7 +158,7 @@ test("an index that was lost is rebuilt at the start, before retention and the l
 	}
 });
 
-test("an index that cannot be rebuilt does not stop the start: said once, and the next start tries again", async () => {
+test("an index that cannot be rebuilt does not stop the start: said once, and the next start tries again", { skip: process.platform === "win32" ? "mode bits" : false }, async () => {
 	const dataDir = makeTempDir("server-rebuild-fails");
 	try {
 		const [id] = seed(dataDir, [1]);
@@ -217,7 +220,7 @@ test("audit log: entries older than the retention go at start and then daily, li
 		try {
 			assert.deepEqual(logged(daemon, "audit.purged").map((l) => [l.entries, l.retention_days]), [[2, 30]]);
 			assert.deepEqual(daemon.auditEntries().map((e) => e.job), ["j_30", "j_10"]);
-			assert.equal(fs.statSync(path.join(dataDir, "audit.jsonl")).mode & 0o777, 0o600);
+			if (MODES) assert.equal(fs.statSync(path.join(dataDir, "audit.jsonl")).mode & 0o777, 0o600);
 			// What the daemon writes from here on lands in the file that took the place of the old one.
 			await daemon.tool("/v1/pages/search", { query: "zebras" });
 			assert.deepEqual(daemon.auditEntries().map((e) => e.kind), ["fetch", "fetch", "search"]);
@@ -304,8 +307,11 @@ test("config.json: retention, cache lifetime, pacing and notifier settings are a
 		assert.equal(await readable(daemon, eightDays), false);
 		assert.equal(await readable(daemon, sixDays), true);
 		// The file was readable by others: fixed, and said so.
-		assert.equal(fs.statSync(path.join(configDir, "config.json")).mode & 0o777, 0o600);
-		assert.deepEqual(logged(daemon, "config.file_mode_fixed").map((l) => [l.level, l.file]), [["warn", path.join(configDir, "config.json")]]);
+		// Windows has no mode bits to loosen or tighten.
+		if (process.platform !== "win32") {
+			if (MODES) assert.equal(fs.statSync(path.join(configDir, "config.json")).mode & 0o777, 0o600);
+			assert.deepEqual(logged(daemon, "config.file_mode_fixed").map((l) => [l.level, l.file]), [["warn", path.join(configDir, "config.json")]]);
+		}
 		// The operator can see what applies.
 		assert.deepEqual((await daemon.status()).settings, {
 			retention_days: 7,
@@ -375,7 +381,7 @@ test("config.json that cannot be used stops the start before anything is created
 	}
 });
 
-test("start: the config directory is checked before config.json in it is read", async (t) => {
+test("start: the config directory is checked before config.json in it is read", { skip: process.platform === "win32" ? "mode bits and uid" : false }, async (t) => {
 	const dir = makeTempDir("server-dircheck");
 	try {
 		// Open to everyone, and holding a config.json that cannot be used: the directory is closed first.

@@ -16,6 +16,9 @@ import { LIMITS as DAEMON_LIMITS } from "../../daemon/src/config.js";
 import { LIMITS, MSG, makeMessage } from "../../extension/shared/protocol.js";
 import { DEFAULT_ALLOW_TYPES } from "../../extension/shared/sniff.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 const CHUNK = LIMITS.BLOB_CHUNK_BYTES;
 const PDF_HEAD = Buffer.from("%PDF-1.4\n");
 /** @param {number} size @returns {Buffer} a made-up PDF of that many bytes */
@@ -104,9 +107,9 @@ test("a fetch that turns out to be a file: asked for with the operator's limits,
 	assert.deepEqual(g.stored(), [id]);
 	assert.deepEqual(fs.readdirSync(g.fileDir(id)).sort(), ["data", "meta.json"]);
 	assert.equal(fs.readFileSync(path.join(g.fileDir(id), "data")).equals(bytes), true);
-	assert.equal(fs.statSync(path.join(g.fileDir(id), "data")).mode & 0o777, 0o600);
-	assert.equal(fs.statSync(path.join(g.fileDir(id), "meta.json")).mode & 0o777, 0o600);
-	for (const dir of [g.fileDir(id), path.dirname(g.fileDir(id)), path.join(g.daemon.dataDir, "files"), path.join(g.daemon.dataDir, "incoming")]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir);
+	if (MODES) assert.equal(fs.statSync(path.join(g.fileDir(id), "data")).mode & 0o777, 0o600);
+	if (MODES) assert.equal(fs.statSync(path.join(g.fileDir(id), "meta.json")).mode & 0o777, 0o600);
+	if (MODES) for (const dir of [g.fileDir(id), path.dirname(g.fileDir(id)), path.join(g.daemon.dataDir, "files"), path.join(g.daemon.dataDir, "incoming")]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700, dir);
 	assert.deepEqual(g.incoming(), [], "moved, not copied: nothing is left where it was put together");
 	assert.deepEqual((await g.daemon.agentStatus()).store, { pages: 0, stored: 0, files: 1, file_bytes: bytes.length, file_bytes_max: 2147483648 });
 	// The audit entry of the job: what the file is and how large. No name, no final address.

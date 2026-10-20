@@ -13,6 +13,9 @@ import { DEFAULT_ALLOW_TYPES } from "../../extension/shared/sniff.js";
 import { FakeClock } from "../helpers/fake-clock.js";
 import { makeTempDir, removeTempDir } from "../helpers/tmp.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 const CHUNK = LIMITS.BLOB_CHUNK_BYTES;
 const POLICY = Object.freeze({ max_bytes: 4 * CHUNK, types: [...DEFAULT_ALLOW_TYPES] });
 const PDF_HEAD = Buffer.from("%PDF-1.4\n");
@@ -52,11 +55,11 @@ function setup(t, opts = {}) {
 test("a file in order: put together in a private place, checked, and handed over where it lies", (t) => {
 	const { blobs, dataDir, left } = setup(t);
 	const bytes = pdf(2 * CHUNK + 4321);
-	assert.equal(fs.statSync(blobs.dir).mode & 0o777, 0o700);
+	if (MODES) assert.equal(fs.statSync(blobs.dir).mode & 0o777, 0o700);
 	assert.equal(blobs.dir, path.join(dataDir, "incoming"));
 	for (const frame of frames(bytes)) blobs.accept("j_one", frame, POLICY.max_bytes);
 	assert.deepEqual(left(), ["j_one.part"], "one file, named after the daemon's own id of the job");
-	assert.equal(fs.statSync(path.join(blobs.dir, "j_one.part")).mode & 0o777, 0o600);
+	if (MODES) assert.equal(fs.statSync(path.join(blobs.dir, "j_one.part")).mode & 0o777, 0o600);
 	assert.deepEqual(blobs.stats(), { open: 1, waiting: 0 });
 	const done = blobs.complete("j_one", describe(bytes), POLICY, "application/pdf");
 	assert.equal(done.ok, true);
@@ -249,10 +252,13 @@ test("the place is the daemon's own: only its job ids make a file name, leftover
 	// Something lies where a transfer wants to begin - a file, or a link to somewhere else: not written to, not followed.
 	const outside = path.join(dataDir, "outside.txt");
 	fs.writeFileSync(outside, "untouched");
-	fs.symlinkSync(outside, path.join(blobs.dir, "j_link.part"));
-	blobs.accept("j_link", frames(small)[0], POLICY.max_bytes);
-	assert.equal(fs.readFileSync(outside, "utf8"), "untouched");
-	assert.equal(blobs.complete("j_link", describe(small), POLICY, "application/pdf").ok, false);
+	// Windows makes no symlink without a privilege.
+	if (process.platform !== "win32") {
+		fs.symlinkSync(outside, path.join(blobs.dir, "j_link.part"));
+		blobs.accept("j_link", frames(small)[0], POLICY.max_bytes);
+		assert.equal(fs.readFileSync(outside, "utf8"), "untouched");
+		assert.equal(blobs.complete("j_link", describe(small), POLICY, "application/pdf").ok, false);
+	}
 	// What an earlier daemon left behind is removed at the start, whatever it is called.
 	fs.writeFileSync(path.join(blobs.dir, "j_old.part"), "half a file");
 	fs.writeFileSync(path.join(blobs.dir, "stray"), "x");

@@ -12,10 +12,13 @@ import { FakeExtension, makeResult } from "../helpers/fake-extension.js";
 import { closedPort, squatter as makeSquatter, rawSquatter as makeRawSquatter } from "../helpers/squatter.js";
 import { parsePairingCode } from "../../extension/shared/auth.js";
 import { PROTOCOL_VERSION } from "../../extension/shared/protocol.js";
+import { SYSTEM_ENV } from "../helpers/mcp-stdio.js";
 
 const CLI = fileURLToPath(new URL("../../cli/bgw", import.meta.url));
 const DAEMONCTL = fileURLToPath(new URL("../../cli/bgw_daemonctl.py", import.meta.url));
 const PYTHON = process.env.PYTHON || "python3";
+/** For tests of what only POSIX has: mode bits, owners, symlinks, FIFOs, the home directory as the default place. */
+const POSIX_ONLY = process.platform === "win32" ? "mode bits, owners, symlinks and home paths are POSIX's; cli-windows.test.js covers Windows" : false;
 
 /** @type {Awaited<ReturnType<typeof startTestDaemon>>} */
 let daemon;
@@ -44,6 +47,7 @@ function bgw(args, env) {
 	const childEnv = {
 		PATH: process.env.PATH ?? "/usr/bin:/bin",
 		HOME: path.join(daemon.dir, "no-such-home"),
+		...SYSTEM_ENV,
 		...(env ?? { BGW_URL: `http://127.0.0.1:${daemon.port}`, BGW_TOKEN_FILE: tokenFile, BGW_ADMIN_TOKEN_FILE: adminFile }),
 	};
 	return new Promise((resolve) => {
@@ -77,11 +81,12 @@ async function unplug(ext) {
 }
 
 test("the CLI is an executable Python script without third-party imports", () => {
-	assert.notEqual(fs.statSync(CLI).mode & 0o111, 0, "executable bit");
+	// Windows keeps no executable bit (and runs the script as "py -3 cli\\bgw").
+	if (process.platform !== "win32") assert.notEqual(fs.statSync(CLI).mode & 0o111, 0, "executable bit");
 	const source = fs.readFileSync(CLI, "utf8");
 	assert.ok(source.startsWith("#!/usr/bin/env python3\n"));
 	const imports = [...source.matchAll(/^(?:import|from)\s+([a-zA-Z0-9_.]+)/gm)].map((m) => m[1].split(".")[0]);
-	const stdlib = new Set(["argparse", "base64", "hashlib", "hmac", "http", "importlib", "json", "os", "queue", "re", "secrets", "select", "shlex", "signal", "socket", "sys", "threading", "time", "urllib"]);
+	const stdlib = new Set(["argparse", "base64", "hashlib", "hmac", "http", "importlib", "json", "msvcrt", "ntpath", "os", "queue", "re", "secrets", "select", "shlex", "signal", "socket", "sys", "threading", "time", "urllib"]);
 	assert.ok(imports.length >= 5);
 	for (const name of imports) assert.ok(stdlib.has(name), `import ${name}`);
 	assert.ok(source.includes('"~/.config/browser-gateway/client.token"'));
@@ -107,7 +112,7 @@ test("bgw daemon lives in a module of its own that starts a program and knows no
 	assert.deepEqual([...source.matchAll(/daemon_controller\(\)\.(\w+)\(/g)].map((m) => m[1]).sort(), ["run", "start_on_demand"], "what is asked of it: the daemon command, and a start on demand");
 	const ctl = fs.readFileSync(DAEMONCTL, "utf8");
 	const imports = [...ctl.matchAll(/^(?:import|from)\s+([a-zA-Z0-9_.]+)/gm)].map((m) => m[1].split(".")[0]);
-	const stdlib = new Set(["errno", "fcntl", "http", "json", "os", "shutil", "signal", "socket", "subprocess", "sys", "threading", "time"]);
+	const stdlib = new Set(["ctypes", "errno", "fcntl", "http", "json", "msvcrt", "ntpath", "os", "re", "shutil", "signal", "socket", "subprocess", "sys", "threading", "time"]);
 	for (const name of imports) assert.ok(stdlib.has(name), `import ${name}`);
 	for (const word of [".token", "Authorization", "Bearer", "BGW_TOKEN", "BGW_ADMIN", "hmac", "/v1/", "/mcp", "shell=True", "os.system", "os.popen"]) assert.ok(!ctl.includes(word), word);
 	// It opens two files for reading besides /proc: its own pid file and the daemon's log.
@@ -1024,7 +1029,7 @@ test("bgw pair and debug-job use the admin token only; the other commands use th
 	assert.ok(parsePairingCode(adminOnly.stdout.split("\n")[0]).ok);
 });
 
-test("bgw: the default token path is the literal ~/.config path, not XDG", async () => {
+test("bgw: the default token path is the literal ~/.config path, not XDG", { skip: POSIX_ONLY }, async () => {
 	const home = path.join(daemon.dir, "home");
 	const expected = path.join(home, ".config", "browser-gateway", "client.token");
 	const env = { BGW_URL: `http://127.0.0.1:${daemon.port}`, HOME: home, XDG_CONFIG_HOME: path.join(daemon.dir, "xdg-elsewhere") };
@@ -1181,7 +1186,7 @@ test("bgw fetch and read take --format raw_html and print what the daemon render
 	}
 });
 
-test("bgw export writes the stored bytes to a file, mode 0600, never prints them, never overwrites without --force", async () => {
+test("bgw export writes the stored bytes to a file, mode 0600, never prints them, never overwrites without --force", { skip: POSIX_ONLY }, async () => {
 	const ext = await pairedExtension();
 	const dir = path.join(daemon.dir, "export-out");
 	fs.mkdirSync(dir);
@@ -1331,7 +1336,7 @@ test("bgw export takes a source of 4 MiB, larger than any other answer the CLI a
 	}
 });
 
-test("bgw reads a token file only if it is a plain file of this user that nobody else can read: no link, no pipe, no device, no other owner, no larger file", async () => {
+test("bgw reads a token file only if it is a plain file of this user that nobody else can read: no link, no pipe, no device, no other owner, no larger file", { skip: POSIX_ONLY }, async () => {
 	const url = `http://127.0.0.1:${daemon.port}`;
 	const dir = fs.mkdtempSync(path.join(daemon.dir, "tokfiles-"));
 	const good = fs.readFileSync(tokenFile, "utf8");
@@ -1376,7 +1381,7 @@ test("bgw reads a token file only if it is a plain file of this user that nobody
 	assert.equal((await bgw(["status"], { BGW_URL: url, BGW_TOKEN_FILE: padded })).stderr, `bgw: token file ${padded} is empty or damaged\n`);
 });
 
-test("bgw still reads the tokens of the real places: mode 0600, own file, also when a directory on the way (the home directory, say) is a link", async () => {
+test("bgw still reads the tokens of the real places: mode 0600, own file, also when a directory on the way (the home directory, say) is a link", { skip: POSIX_ONLY }, async () => {
 	const url = `http://127.0.0.1:${daemon.port}`;
 	const dir = fs.mkdtempSync(path.join(daemon.dir, "home-"));
 	const real = path.join(dir, "real-home");

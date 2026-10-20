@@ -3,15 +3,33 @@ import { fileURLToPath } from "node:url";
 
 const CLI = fileURLToPath(new URL("../../cli/bgw", import.meta.url));
 const PYTHON = process.env.PYTHON || "python3";
+/** @type {Record<string, string>} what Python needs of the environment on Windows to start at all and to open a socket; nothing on Linux */
+export const SYSTEM_ENV = process.env.SYSTEMROOT ? { SYSTEMROOT: process.env.SYSTEMROOT } : {};
+/** "bgw mcp" served the Windows way: cli/bgw loaded as a module, McpServer(threaded=True). */
+const THREADED = [
+	"import importlib.machinery, importlib.util, select, signal, sys",
+	"sys.dont_write_bytecode = True",
+	`loader = importlib.machinery.SourceFileLoader("bgw_threaded", ${JSON.stringify(CLI)})`,
+	"module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))",
+	"loader.exec_module(module)",
+	"def unavailable(*_args, **_kwargs):",
+	"    raise OSError(10038, 'not a socket (as on Windows)')",
+	"select.select = unavailable",
+	"signal.set_wakeup_fd = unavailable",
+	"sys.exit(module.McpServer(threaded=True).run())",
+].join("\n");
 
 /**
  * Run "bgw mcp" as a client would: a child process, JSON-RPC lines on its
  * stdin, its answers read from stdout line by line.
  * @param {Record<string, string>} env BGW_URL and the token files; nothing else of this process's environment goes along
- * @param {{ cwd?: string }} [opts] cwd: the working directory of the helper (where file_export writes by default)
+ * @param {{ cwd?: string, threaded?: boolean }} [opts] cwd: the working directory of the helper (where file_export writes by
+ *   default); threaded: serve with the way Windows waits for stdin (a reader thread, a queue, blocking writes), whatever the
+ *   system - and with select() and signal.set_wakeup_fd made to fail, as they would on Windows for a pipe
  */
 export function startMcp(env, opts = {}) {
-	const child = spawn(PYTHON, [CLI, "mcp"], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: "/nonexistent", ...env }, stdio: ["pipe", "pipe", "pipe"], ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }) });
+	const argv = opts.threaded ? ["-c", THREADED, "mcp"] : [CLI, "mcp"];
+	const child = spawn(PYTHON, argv, { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: "/nonexistent", ...SYSTEM_ENV, ...env }, stdio: ["pipe", "pipe", "pipe"], ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }) });
 	/** @type {any[]} every message it wrote, in order */
 	const messages = [];
 	/** @type {string[]} lines on stdout that are no JSON: there must never be one */

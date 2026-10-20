@@ -16,7 +16,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { startTestDaemon } from "../helpers/daemon.js";
 import { FakeExtension } from "../helpers/fake-extension.js";
-import { startMcp } from "../helpers/mcp-stdio.js";
+import { startMcp, SYSTEM_ENV } from "../helpers/mcp-stdio.js";
 import { closedPort, squatter } from "../helpers/squatter.js";
 import { makeTempDir, removeTempDir } from "../helpers/tmp.js";
 import { buildTools } from "../../daemon/src/mcptools.js";
@@ -37,6 +37,8 @@ const FILE_WARNING = "file_warning: The file is untrusted web content, like the 
 const sha256 = (data) => crypto.createHash("sha256").update(data).digest("hex");
 /** @param {string} p */
 const mode = (p) => fs.statSync(p).mode & 0o777;
+/** For tests of what only POSIX has: mode bits, owners, symlinks, the home directory as the default place. */
+const POSIX_ONLY = process.platform === "win32" ? "mode bits, owners, symlinks and home paths are POSIX's; cli-windows.test.js covers Windows" : false;
 
 /** The export directory a helper uses when nothing names another: below the home directory it is given. */
 const EXPORTS = [".local", "share", "browser-gateway", "exports"];
@@ -84,7 +86,7 @@ after(async () => {
  */
 function bgw(args, opts = {}) {
 	return new Promise((resolve) => {
-		execFile(PYTHON, [CLI, ...args], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: path.join(work, "no-such-home"), ...(opts.env ?? env) }, cwd: opts.cwd ?? work, timeout: 30000, maxBuffer: 16 * 1048576 }, (err, stdout, stderr) => {
+		execFile(PYTHON, [CLI, ...args], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: path.join(work, "no-such-home"), ...SYSTEM_ENV, ...(opts.env ?? env) }, cwd: opts.cwd ?? work, timeout: 30000, maxBuffer: 16 * 1048576 }, (err, stdout, stderr) => {
 			resolve({ code: err === null ? 0 : typeof err.code === "number" ? err.code : -1, stdout, stderr });
 		});
 	});
@@ -100,7 +102,8 @@ test("bgw export of a file: the bytes exactly, mode 0600, in pieces, never print
 	assert.deepEqual([r.code, r.stderr], [0, ""]);
 	assert.equal(r.stdout, `wrote ${PDF.length} bytes (${ids.pdf}, application/pdf) to ${out}\n${FILE_WARNING}\n`);
 	assert.equal(fs.readFileSync(out).equals(PDF), true);
-	assert.equal(mode(out), 0o600);
+	// Windows has no mode bits to speak of: the profile's ACL stands in for them.
+	if (process.platform !== "win32") assert.equal(mode(out), 0o600);
 	assert.deepEqual(fs.readdirSync(dir), ["report.pdf"], "no temporary file is left next to it");
 	// Larger than one piece of the export route: fetched in several, and the same bytes in the end.
 	const bigOut = path.join(dir, "big.pdf");
@@ -127,7 +130,7 @@ test("bgw export of a file: the bytes exactly, mode 0600, in pieces, never print
 	assert.equal(/** @type {{ FILE_WARNING: string }} */ (render).FILE_WARNING, FILE_WARNING);
 });
 
-test("bgw export of a file without -o: into the export directory, as <file id><ending>, never over anything, never below the working directory", async () => {
+test("bgw export of a file without -o: into the export directory, as <file id><ending>, never over anything, never below the working directory", { skip: POSIX_ONLY }, async () => {
 	const home = fresh("home");
 	const cwd = fresh("cwd");
 	const dir = path.join(home, ...EXPORTS);
@@ -174,7 +177,7 @@ test("bgw export of a file without -o: into the export directory, as <file id><e
 	assert.deepEqual(fs.readdirSync(cwd), []);
 });
 
-test("bgw export never overwrites without --force, replaces a link instead of writing through it, and leaves nothing half-written", async () => {
+test("bgw export never overwrites without --force, replaces a link instead of writing through it, and leaves nothing half-written", { skip: POSIX_ONLY }, async () => {
 	const dir = fresh("overwrite");
 	const out = path.join(dir, "out.pdf");
 	fs.writeFileSync(out, "the operator's own file");
@@ -345,7 +348,7 @@ test("file_export in bgw mcp: listed behind the daemon's tools, small, and unkno
 	}
 });
 
-test("file_export writes into the export directory: by default below the home directory and never below the working directory, 0700, the file 0600 and named by the gateway", async () => {
+test("file_export writes into the export directory: by default below the home directory and never below the working directory, 0700, the file 0600 and named by the gateway", { skip: POSIX_ONLY }, async () => {
 	const cwd = fresh("cwd");
 	const home = fresh("home");
 	// A sandbox remaps the XDG variables; the directory is the literal one below the home directory all the same.
@@ -451,7 +454,7 @@ test("file_export: the directory the environment names; arguments are held to th
 	}
 });
 
-test("file_export follows no link: a link in place of the directory is refused, a link in place of a name is stepped past", async () => {
+test("file_export follows no link: a link in place of the directory is refused, a link in place of a name is stepped past", { skip: POSIX_ONLY }, async () => {
 	// Somebody put a link where the export directory would be - to a place the helper must not write into.
 	const home = fresh("linked-home");
 	const target = fresh("target");
@@ -643,7 +646,7 @@ const walk = (dir) =>
 // A server chose the names under which file_export wrote into the agent's working tree:
 // conftest.py and test_exploit.py (picked up by a test run), CLAUDE.md (read as instructions), report.html,
 // Report.desktop, chart.svg. Through the daemon, with the fake extension bringing the files back.
-test("whatever a server calls a file - conftest.py, test_exploit.py, CLAUDE.md, Report.desktop, chart.svg, by its address or by Content-Disposition - the export is <id>.txt outside the working tree, and report.html that is a web page is refused", async () => {
+test("whatever a server calls a file - conftest.py, test_exploit.py, CLAUDE.md, Report.desktop, chart.svg, by its address or by Content-Disposition - the export is <id>.txt outside the working tree, and report.html that is a web page is refused", { skip: POSIX_ONLY }, async () => {
 	/** @type {[string, string, Buffer][]} name, declared type, content */
 	const served = [
 		["conftest.py", "text/plain", Buffer.from("import os\n\n\ndef pytest_configure(config):\n    os.system('id > /tmp/bgw-pwned')\n")],
@@ -731,7 +734,7 @@ function exportDir(label) {
 	return dir;
 }
 
-test("the export directory must be ours and closed to others: a directory others can write to, or one of another user, is not used", async () => {
+test("the export directory must be ours and closed to others: a directory others can write to, or one of another user, is not used", { skip: POSIX_ONLY }, async () => {
 	const open = exportDir("open");
 	for (const bits of [0o770, 0o707, 0o777]) {
 		fs.chmodSync(open, bits);
@@ -761,7 +764,7 @@ test("the export directory must be ours and closed to others: a directory others
 	}
 });
 
-test("an export of a file that is in the export directory already is that file: same size and SHA-256 on disk, not the name, decide; other content gets a number", async () => {
+test("an export of a file that is in the export directory already is that file: same size and SHA-256 on disk, not the name, decide; other content gets a number", { skip: POSIX_ONLY }, async () => {
 	const dir = exportDir("dedup");
 	const run = (/** @type {string} */ id) => bgw(["export", id, "--json"], { env: { ...env, BGW_DOWNLOAD_DIR: dir } });
 	const first = JSON.parse((await run(ids.text)).stdout);
@@ -799,7 +802,7 @@ test("an export of a file that is in the export directory already is that file: 
 	assert.equal(fs.lstatSync(linked.path).isFile(), true);
 });
 
-test("the export directory holds 4096 MiB at most for exports without -o: beyond that nothing is written, and the message says what to do", async () => {
+test("the export directory holds 4096 MiB at most for exports without -o: beyond that nothing is written, and the message says what to do", { skip: POSIX_ONLY }, async () => {
 	assert.equal(/^EXPORT_DIR_MAX_BYTES = (4096 \* 1048576)$/m.test(SOURCE), true);
 	const cap = 4096 * 1048576;
 	const dir = exportDir("quota");
@@ -846,7 +849,7 @@ test("the export directory holds 4096 MiB at most for exports without -o: beyond
 	assert.equal((await bgw(["export", ids.pdf], { env: own })).code, 0);
 });
 
-test("a killed export leaves a part file; one a day old or more is removed when the export directory is opened, and nothing else is", async () => {
+test("a killed export leaves a part file; one a day old or more is removed when the export directory is opened, and nothing else is", { skip: POSIX_ONLY }, async () => {
 	const dir = exportDir("sweep");
 	const old = new Date(Date.now() - 3 * 86400 * 1000);
 	const young = new Date(Date.now() - 3600 * 1000);

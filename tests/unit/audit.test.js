@@ -6,6 +6,9 @@ import { AUDIT_LIMITS, AuditLog } from "../../daemon/src/audit.js";
 import { FakeClock } from "../helpers/fake-clock.js";
 import { makeTempDir, removeTempDir } from "../helpers/tmp.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 const DAY = 86400000;
 
 /** @type {string[]} */
@@ -56,7 +59,7 @@ test("purge drops the entries that are older than the retention and keeps every 
 
 	assert.deepEqual(t.audit.purge({ maxAgeMs: 30 * DAY }), { entries: 2 });
 	assert.deepEqual(t.entries().map((e) => e.job), ["j_mid", "j_edge"]);
-	assert.equal(mode(t.audit.file), 0o600);
+	if (MODES) assert.equal(mode(t.audit.file), 0o600);
 	assert.deepEqual(fs.readdirSync(t.dataDir), ["audit.jsonl"], "nothing else is left in the directory");
 
 	// The log goes on in the new file, not in the one that was replaced.
@@ -138,7 +141,7 @@ test("purge: whenever the process ends, the log is whole - the old one or the ne
 	});
 	t.mock.method(fs, "renameSync", (/** @type {string} */ from, /** @type {string} */ to) => {
 		order.push(`rename ${path.basename(from).replace(/[0-9a-f]{12}/, "X")} ${path.basename(to)}`);
-		assert.equal(mode(from), 0o600);
+		if (MODES) assert.equal(mode(from), 0o600);
 		assert.equal(path.dirname(from), s.dataDir, "in the same directory, so the rename is one step");
 		return realRename(from, to);
 	});
@@ -172,8 +175,8 @@ test("size limit: a full log is set aside as audit.jsonl.1, one generation, and 
 	assert.deepEqual(t.entries().map((e) => e.job), [`j_${n - 1}`]);
 	assert.deepEqual(t.entries(t.audit.rotated).map((e) => e.job), Array.from({ length: n - 1 }, (_, i) => `j_${i}`));
 	assert.ok(fs.statSync(t.audit.rotated).size <= 1000);
-	assert.equal(mode(t.audit.rotated), 0o600);
-	assert.equal(mode(t.audit.file), 0o600);
+	if (MODES) assert.equal(mode(t.audit.rotated), 0o600);
+	if (MODES) assert.equal(mode(t.audit.file), 0o600);
 	assert.deepEqual(t.logged("audit.rotated").length, 1);
 
 	// The next time, the file set aside before is replaced: never more than two.
@@ -188,7 +191,7 @@ test("size limit: a full log is set aside as audit.jsonl.1, one generation, and 
 	const inRotated = t.entries(t.audit.rotated).length;
 	assert.deepEqual(t.audit.purge({ maxAgeMs: 5 * DAY }), { entries: 1 });
 	assert.equal(t.entries(t.audit.rotated).length, inRotated - 1);
-	assert.equal(mode(t.audit.rotated), 0o600);
+	if (MODES) assert.equal(mode(t.audit.rotated), 0o600);
 	t.clock.advance(6 * DAY);
 	t.add("j_young");
 	assert.equal(t.logged("audit.rotated").length, 2);
@@ -241,7 +244,7 @@ test("a write that fails: the entry waits, work is refused while it does, and th
 	assert.deepEqual(s.logged("audit.write_recovered").map((l) => [l.level, l.fields.entries]), [["info", 2]]);
 	s.add("j_4");
 	assert.deepEqual(s.entries().map((e) => e.job), ["j_1", "j_2", "j_3", "j_4"]);
-	assert.equal(mode(s.audit.file), 0o600);
+	if (MODES) assert.equal(mode(s.audit.file), 0o600);
 
 	// An append is a try as well, and a second failure is said again.
 	full = true;
@@ -269,7 +272,7 @@ test("a write that fails: the entry waits, work is refused while it does, and th
 	full = false;
 	assert.equal(s.audit.ok, true);
 	assert.deepEqual(s.entries().map((e) => e.job), ["j_7"]);
-	assert.equal(mode(s.audit.file), 0o600);
+	if (MODES) assert.equal(mode(s.audit.file), 0o600);
 
 	// Closed is closed: nothing is opened again, and nothing waits.
 	s.audit.close();
@@ -278,7 +281,7 @@ test("a write that fails: the entry waits, work is refused while it does, and th
 	assert.deepEqual(s.entries().map((e) => e.job), ["j_7"]);
 });
 
-test("the audit file is opened as a plain file of its own: a link in its place is refused", () => {
+test("the audit file is opened as a plain file of its own: a link in its place is refused", { skip: process.platform === "win32" ? "symlinks" : false }, () => {
 	const t = setup();
 	fs.mkdirSync(t.dataDir, { mode: 0o700 });
 	const elsewhere = path.join(t.dir, "elsewhere");

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { ensurePrivateDir } from "./config.js";
+import { ensurePrivateDir, openNoFollow } from "./config.js";
 import { ERROR_CODE, LIMITS as WIRE } from "../../extension/shared/protocol.js";
 import { SNIFF_BYTES, decideFile } from "../../extension/shared/sniff.js";
 
@@ -137,7 +137,7 @@ export class BlobAssembler {
 		this.#open.set(job, t);
 		try {
 			// Exclusive: a file of that name is nobody's to append to.
-			t.fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+			t.fd = openNoFollow(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
 			fs.fchmodSync(t.fd, 0o600);
 		} catch (err) {
 			this.#log.error("blobs.open_failed", { message: err instanceof Error ? err.message.slice(0, 120) : "unknown" });
@@ -210,7 +210,7 @@ export class BlobAssembler {
 				fs.closeSync(t.fd);
 				t.fd = null;
 			}
-			const fd = fs.openSync(t.file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+			const fd = openNoFollow(t.file, fs.constants.O_RDONLY);
 			try {
 				head = Buffer.alloc(Math.min(t.bytes, SNIFF_BYTES));
 				fs.readSync(fd, head, 0, head.length, 0);

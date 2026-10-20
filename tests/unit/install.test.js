@@ -31,6 +31,7 @@ const NODE = (spawnSync("sh", ["-c", "command -v node"], { encoding: "utf8" }).s
 
 /** @returns {string | false} why the tests cannot run here */
 function skipReason() {
+	if (process.platform === "win32") return "POSIX shell scripts and systemd only";
 	for (const tool of ["sh", "sed", "find", "readlink"]) {
 		if (spawnSync(tool, ["--version"], { stdio: "ignore" }).error !== undefined) return `${tool} is not available`;
 	}

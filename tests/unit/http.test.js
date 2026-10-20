@@ -12,6 +12,9 @@ import { MSG, makeMessage } from "../../extension/shared/protocol.js";
 import { JOB_WAIT_MAX, LIMITS, LOAD_TIMEOUT_S } from "../../daemon/src/config.js";
 import { FETCH_LIMITS } from "../../daemon/src/fetchsvc.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 /** @type {Awaited<ReturnType<typeof startTestDaemon>>} */
 let daemon;
 
@@ -714,7 +717,7 @@ test("the agent token cannot mint pairing codes", async () => {
 
 test("each token has its own routes: raw jobs and pairing for the operator, tools for the agent", async () => {
 	assert.notEqual(daemon.adminToken, daemon.token);
-	assert.equal(fs.statSync(path.join(daemon.configDir, "admin.token")).mode & 0o777, 0o600);
+	if (MODES) assert.equal(fs.statSync(path.join(daemon.configDir, "admin.token")).mode & 0o777, 0o600);
 
 	// The agent token gets nothing from the raw job route: no result, no job, no audit entry.
 	const before = daemon.auditEntries().length;

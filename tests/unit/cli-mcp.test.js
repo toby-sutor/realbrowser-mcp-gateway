@@ -22,6 +22,10 @@ import { makeEngines } from "../../daemon/src/search.js";
 const CLI = fileURLToPath(new URL("../../cli/bgw", import.meta.url));
 const PYTHON = process.env.PYTHON || "python3";
 const SOURCE = fs.readFileSync(CLI, "utf8");
+/** Windows sends no SIGTERM or SIGINT to another process: child.kill() ends it at once there. */
+const SIGNALS = process.platform === "win32" ? "no signals between processes on Windows" : false;
+/** The POSIX registration and a symlink to the script; the Windows one is tried in cli-windows.test.js. */
+const POSIX_ONLY = process.platform === "win32" ? "the POSIX registration and a symlink; cli-windows.test.js covers Windows" : false;
 /** The version `bgw mcp` reports: the one of the checkout it sits in. */
 const CLI_VERSION = JSON.parse(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 const MODERN = "2026-07-28";
@@ -461,7 +465,7 @@ test("stdin EOF: a last message without a line end is answered, then the helper 
 	assertClean(mcp);
 });
 
-test("stdin EOF and SIGTERM with a call under way: the helper leaves at once, and the daemon cancels the job nobody waits for", async () => {
+test("stdin EOF and SIGTERM with a call under way: the helper leaves at once, and the daemon cancels the job nobody waits for", { skip: SIGNALS }, async () => {
 	const ext = await pairedExtension();
 	try {
 		for (const how of /** @type {const} */ (["eof", "SIGTERM", "SIGINT"])) {
@@ -488,7 +492,59 @@ test("stdin EOF and SIGTERM with a call under way: the helper leaves at once, an
 	}
 });
 
-test("a client that stops reading does not hold the helper: it still leaves on SIGTERM, and gives up by itself when answers pile up", async () => {
+test("the Windows way of waiting for stdin (a reader thread and a queue; select() and the wake-up pipe made to fail), on any system: the same answers, framing, limits, EOF and signals", async () => {
+	const mcp = startMcp(env, { threaded: true });
+	try {
+		const init = await mcp.request("initialize", INIT);
+		assert.equal(init.result.protocolVersion, "2025-06-18");
+		assert.equal((await mcp.request("tools/list")).result.tools.length, 6);
+		// A call through the daemon, after its proof.
+		const status = await mcp.request("tools/call", { name: "gateway_status", arguments: {} });
+		assert.equal(status.result.isError, false);
+		/** @param {string} line @returns {Promise<any>} the next message after sending it */
+		const after = async (line) => {
+			const from = mcp.messages.length;
+			mcp.writeRaw(line);
+			return mcp.waitFor((m) => mcp.messages.indexOf(m) >= from, 5000);
+		};
+		assert.deepEqual(await after('{"jsonrpc":"2.0","id":8,"method":"ping"}\r\n'), { jsonrpc: "2.0", id: 8, result: {} });
+		assert.deepEqual(await after("not JSON\n"), { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
+		// One message in two writes, and two messages in one.
+		mcp.writeRaw('{"jsonrpc":"2.0","id":9,');
+		assert.deepEqual(await after('"method":"ping"}\n{"jsonrpc":"2.0","id":10,"method":"ping"}\n'), { jsonrpc: "2.0", id: 9, result: {} });
+		assert.deepEqual(await mcp.waitFor((m) => m.id === 10, 5000), { jsonrpc: "2.0", id: 10, result: {} });
+		// Larger than any message: refused once, skipped to its end.
+		const big = mcp.messages.length;
+		mcp.writeRaw(`{"jsonrpc":"2.0","id":11,"method":"ping","params":{"x":"${"a".repeat(3 * 1048576)}`);
+		mcp.writeRaw('"}}\n');
+		assert.deepEqual(await mcp.waitFor((m) => mcp.messages.indexOf(m) >= big, 10000), { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request: a message is larger than 1048576 bytes" } });
+		assert.deepEqual((await mcp.request("ping")).result, {});
+		assert.equal(mcp.messages.length, big + 2, "one error for the whole line");
+		// The end of stdin, with a last message that has no line end.
+		mcp.writeRaw('{"jsonrpc":"2.0","id":12,"method":"ping"}');
+		const started = Date.now();
+		mcp.end();
+		assert.deepEqual(await mcp.exited, { code: 0, signal: null });
+		assert.ok(Date.now() - started < 3000, `left ${Date.now() - started} ms after EOF`);
+		assert.deepEqual(mcp.messages.at(-1), { jsonrpc: "2.0", id: 12, result: {} });
+		assertClean(mcp);
+	} finally {
+		await mcp.stop();
+	}
+	if (process.platform === "win32") return;
+	// A signal only sets the flag there: it is seen within the second the wait on the queue lasts.
+	for (const how of /** @type {const} */ (["SIGTERM", "SIGINT"])) {
+		const signalled = startMcp(env, { threaded: true });
+		assert.deepEqual((await signalled.request("ping")).result, {});
+		const started = Date.now();
+		signalled.signal(how);
+		assert.deepEqual(await signalled.exited, { code: 0, signal: null }, how);
+		assert.ok(Date.now() - started < 2500, `${how}: left after ${Date.now() - started} ms`);
+		assertClean(signalled);
+	}
+});
+
+test("a client that stops reading does not hold the helper: it still leaves on SIGTERM, and gives up by itself when answers pile up", { skip: SIGNALS }, async () => {
 	const port = await closedPort();
 	/** Start the helper with nobody reading its stdout, and send it "count" requests that it answers by itself. @param {number} count */
 	const stalled = (count) => {
@@ -571,7 +627,7 @@ test("bgw mcp: a BGW_URL that is not the loopback daemon ends it before anything
 	}
 });
 
-test("bgw mcp-config prints the registration command and the config entry with the real path of the script, and changes nothing", async () => {
+test("bgw mcp-config prints the registration command and the config entry with the real path of the script, and changes nothing", { skip: POSIX_ONLY }, async () => {
 	const home = path.join(daemon.dir, "mcp-config-home");
 	fs.mkdirSync(home);
 	/** @param {string[]} args @returns {Promise<{ code: number, stdout: string, stderr: string }>} */

@@ -138,7 +138,7 @@ function streamAfterRefusal(port, bytes, overMs) {
 	});
 }
 
-test("N1: a refused peer is cut off at once - what it streams after the refusal is not buffered", async () => {
+test("N1: a refused peer is cut off at once - what it streams after the refusal is not buffered", { skip: process.platform === "win32" ? "reads /proc" : false }, async () => {
 	const daemon = await startDaemonProcess();
 	try {
 		const before = rss(daemon.pid);

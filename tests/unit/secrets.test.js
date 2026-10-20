@@ -25,6 +25,9 @@ import { b64urlDecode, parsePairingCode, randomBytes } from "../../extension/sha
 import { FakeClock } from "../helpers/fake-clock.js";
 import { TMP_ROOT, makeTempDir, removeTempDir } from "../helpers/tmp.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 /** @type {string[]} */
 const dirs = [];
 after(() => {
@@ -68,7 +71,7 @@ test("test files live under the test temp root, never in the system temp dir", (
 	assert.throws(() => removeTempDir(path.join(TMP_ROOT, "..", "elsewhere")), /outside the test temp root/);
 });
 
-test("config: defaults come from the home directory, not from XDG variables", () => {
+test("config: defaults come from the home directory, not from XDG variables", { skip: process.platform === "win32" ? "POSIX paths" : false }, () => {
 	const c = loadConfig({ XDG_CONFIG_HOME: "/somewhere/else/config", XDG_DATA_HOME: "/somewhere/else/data" });
 	assert.equal(c.port, DEFAULT_PORT);
 	assert.equal(c.port, 8791);
@@ -76,7 +79,7 @@ test("config: defaults come from the home directory, not from XDG variables", ()
 	assert.equal(c.dataDir, path.join(os.homedir(), ".local", "share", "browser-gateway"));
 });
 
-test("config: environment overrides and validation", () => {
+test("config: environment overrides and validation", { skip: process.platform === "win32" ? "POSIX paths" : false }, () => {
 	const c = loadConfig({ BGW_PORT: "18080", BGW_CONFIG_DIR: "/srv/bgw/config/", BGW_DATA_DIR: "/srv/bgw/../bgw/data" });
 	assert.deepEqual(c, { port: 18080, configDir: "/srv/bgw/config/", dataDir: "/srv/bgw/data" });
 	assert.equal(loadConfig({ BGW_PORT: "0" }).port, 0);
@@ -95,7 +98,7 @@ test("config: loadConfig touches no files", () => {
 	assert.equal(fs.existsSync(path.join(t.dir, "data")), false);
 });
 
-test("private directories: created 0700, looser ones are tightened", () => {
+test("private directories: created 0700, looser ones are tightened", { skip: process.platform === "win32" ? "mode bits" : false }, () => {
 	const t = setup();
 	const fresh = path.join(t.dir, "a", "b", "c");
 	assert.deepEqual(ensurePrivateDir(fresh), { tightened: false });
@@ -116,7 +119,7 @@ test("private directories: created 0700, looser ones are tightened", () => {
 	assert.throws(() => ensurePrivateDir("relative/dir"), /absolute/);
 });
 
-test("private files: written 0600 atomically, looser ones are tightened, symlinks refused", () => {
+test("private files: written 0600 atomically, looser ones are tightened, symlinks refused", { skip: process.platform === "win32" ? "mode bits and symlinks" : false }, () => {
 	const t = setup();
 	fs.mkdirSync(t.configDir, { recursive: true });
 	const file = path.join(t.configDir, "secret");
@@ -151,7 +154,7 @@ test("private files: written 0600 atomically, looser ones are tightened, symlink
 	assert.throws(() => readPrivateFile(link), /not a regular file/);
 });
 
-test("a directory is checked without being made: missing is said, a looser one is tightened, anything else is refused", () => {
+test("a directory is checked without being made: missing is said, a looser one is tightened, anything else is refused", { skip: process.platform === "win32" ? "mode bits" : false }, () => {
 	const t = setup();
 	const missing = path.join(t.dir, "not", "there");
 	assert.deepEqual(checkPrivateDir(missing), { exists: false, tightened: false });
@@ -168,7 +171,7 @@ test("a directory is checked without being made: missing is said, a looser one i
 	assert.throws(() => checkPrivateDir("relative/dir"), /absolute/);
 });
 
-test("private files: checked, tightened and read through one descriptor, never by name a second time", (t) => {
+test("private files: checked, tightened and read through one descriptor, never by name a second time", { skip: process.platform === "win32" ? "mode bits" : false }, (t) => {
 	const s = setup();
 	fs.mkdirSync(s.configDir, { recursive: true, mode: 0o700 });
 	const file = path.join(s.configDir, "config.json");
@@ -221,8 +224,8 @@ test("client.token: created on first start, 0600 in a 0700 directory, stable aft
 	const t = setup();
 	const s = t.make();
 	s.init();
-	assert.equal(mode(t.configDir), 0o700);
-	assert.equal(mode(t.tokenFile), 0o600);
+	if (MODES) assert.equal(mode(t.configDir), 0o700);
+	if (MODES) assert.equal(mode(t.tokenFile), 0o600);
 	const token = fs.readFileSync(t.tokenFile, "utf8");
 	assert.match(token, /^[A-Za-z0-9_-]{43}\n$/);
 	assert.equal(b64urlDecode(token.trim())?.length, 32);
@@ -257,7 +260,7 @@ test("admin.token: created on first start like client.token, and a different tok
 	const t = setup();
 	const s = t.make();
 	s.init();
-	assert.equal(mode(t.adminFile), 0o600);
+	if (MODES) assert.equal(mode(t.adminFile), 0o600);
 	const admin = fs.readFileSync(t.adminFile, "utf8");
 	const client = fs.readFileSync(t.tokenFile, "utf8");
 	assert.match(admin, /^[A-Za-z0-9_-]{43}\n$/);
@@ -274,7 +277,7 @@ test("admin.token: created on first start like client.token, and a different tok
 	fs.rmSync(t.adminFile);
 	const upgraded = t.make();
 	upgraded.init();
-	assert.equal(mode(t.adminFile), 0o600);
+	if (MODES) assert.equal(mode(t.adminFile), 0o600);
 	assert.notEqual(fs.readFileSync(t.adminFile, "utf8"), admin);
 	assert.equal(fs.readFileSync(t.tokenFile, "utf8"), client, "the agent token is left alone");
 });
@@ -317,7 +320,7 @@ test("a damaged admin.token stops the start", () => {
 	}
 });
 
-test("existing loose modes are fixed on start, and logged", () => {
+test("existing loose modes are fixed on start, and logged", { skip: process.platform === "win32" ? "mode bits" : false }, () => {
 	const t = setup();
 	t.make().init();
 	fs.chmodSync(t.configDir, 0o755);
@@ -331,7 +334,7 @@ test("existing loose modes are fixed on start, and logged", () => {
 	assert.ok(t.logs.some((l) => l.level === "warn" && l.event === "config.dir_mode_fixed"));
 });
 
-test("a token or key file with loose permissions is fixed and the warning names the file", () => {
+test("a token or key file with loose permissions is fixed and the warning names the file", { skip: process.platform === "win32" ? "mode bits" : false }, () => {
 	const t = setup();
 	const s = t.make();
 	s.init();
@@ -385,7 +388,7 @@ test("ext.key: written at pairing 0600, survives a restart, replacement is logge
 	s.setExtKey(key1);
 	assert.equal(s.isPaired(), true);
 	assert.deepEqual(s.extKey(), key1);
-	assert.equal(mode(t.keyFile), 0o600);
+	if (MODES) assert.equal(mode(t.keyFile), 0o600);
 	assert.match(fs.readFileSync(t.keyFile, "utf8"), /^[A-Za-z0-9_-]{43}\n$/);
 	assert.ok(t.logs.some((l) => l.level === "info" && l.event === "pairing.ext_key_created"));
 	assert.ok(!t.logs.some((l) => l.event === "pairing.ext_key_replaced"));
@@ -398,7 +401,7 @@ test("ext.key: written at pairing 0600, survives a restart, replacement is logge
 	const key2 = randomBytes(32);
 	restarted.setExtKey(key2);
 	assert.deepEqual(restarted.extKey(), key2);
-	assert.equal(mode(t.keyFile), 0o600);
+	if (MODES) assert.equal(mode(t.keyFile), 0o600);
 	const replaced = t.logs.filter((l) => l.event === "pairing.ext_key_replaced");
 	assert.equal(replaced.length, 1);
 	assert.equal(replaced[0].level, "warn");
@@ -639,8 +642,8 @@ test("audit log: JSONL, 0600, origins only", () => {
 	assert.equal(audit.ok, false, "not usable before open()");
 	audit.open();
 	assert.equal(audit.ok, true);
-	assert.equal(mode(dataDir), 0o700);
-	assert.equal(mode(audit.file), 0o600);
+	if (MODES) assert.equal(mode(dataDir), 0o700);
+	if (MODES) assert.equal(mode(audit.file), 0o600);
 
 	audit.append({
 		job: "j_1",
@@ -686,8 +689,11 @@ test("audit log: JSONL, 0600, origins only", () => {
 	fs.chmodSync(audit.file, 0o644);
 	const reopened = new AuditLog({ dataDir, clock: t.clock, log: t.log });
 	reopened.open();
-	assert.equal(mode(audit.file), 0o600);
-	assert.ok(t.logs.some((l) => l.level === "warn" && l.event === "audit.file_mode_fixed" && l.fields.file === audit.file));
+	if (MODES) assert.equal(mode(audit.file), 0o600);
+	// Windows has no mode bits to loosen or tighten.
+	if (process.platform !== "win32") {
+		assert.ok(t.logs.some((l) => l.level === "warn" && l.event === "audit.file_mode_fixed" && l.fields.file === audit.file));
+	}
 	reopened.append({ job: "j_3", kind: "fetch", url: "https://example.com/", outcome: "ok", code: null, cookie_scope: "container", duration_ms: 1, redirect_origins: [] });
 	reopened.close();
 	assert.equal(fs.readFileSync(audit.file, "utf8").split("\n").filter(Boolean).length, 3);
@@ -850,12 +856,15 @@ test("config.json: every key, read from the file", () => {
 	assert.equal(parseSettings({ retention_days: 3650 }).retentionDays, 3650);
 
 	// A file others could read or write is fixed, and the caller is told which.
-	fs.chmodSync(file, 0o664);
-	/** @type {string[]} */
-	const fixed = [];
-	loadSettings(t.configDir, (f) => fixed.push(f));
-	assert.deepEqual(fixed, [file]);
-	assert.equal(mode(file), 0o600);
+	// Windows has no mode bits to loosen or tighten.
+	if (process.platform !== "win32") {
+		fs.chmodSync(file, 0o664);
+		/** @type {string[]} */
+		const fixed = [];
+		loadSettings(t.configDir, (f) => fixed.push(f));
+		assert.deepEqual(fixed, [file]);
+		if (MODES) assert.equal(mode(file), 0o600);
+	}
 });
 
 test("config.json: strict - unknown keys, wrong types and values out of range stop the start", () => {
@@ -932,8 +941,11 @@ test("config.json: strict - unknown keys, wrong types and values out of range st
 	fs.mkdirSync(file);
 	assert.throws(() => loadSettings(t.configDir), (err) => err instanceof ConfigError && /not a regular file/.test(err.message));
 	fs.rmdirSync(file);
-	fs.symlinkSync(t.tokenFile, file);
-	assert.throws(() => loadSettings(t.configDir), ConfigError, "a symlink is not followed");
+	// Windows makes no symlink without a privilege.
+	if (process.platform !== "win32") {
+		fs.symlinkSync(t.tokenFile, file);
+		assert.throws(() => loadSettings(t.configDir), ConfigError, "a symlink is not followed");
+	}
 });
 
 test("socket activation: a descriptor is taken only when it was handed to this process", () => {

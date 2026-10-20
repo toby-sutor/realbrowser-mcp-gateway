@@ -62,7 +62,8 @@ the `browser-gateway` folders and MCP server name.
 
 Status: version 0.1.9, first public release. It was built and used on one
 desktop setup (Linux, KDE Plasma, Waterfox). See "Limits and known
-issues" before you rely on it.
+issues" before you rely on it. Windows support is minimal and has not been
+used on a real Windows machine by the author (see "Windows").
 
 ## How it works
 
@@ -94,9 +95,9 @@ are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Requirements
 
-- Linux. Developed and used on Linux with KDE Plasma (Wayland). The daemon
-  controller reads `/proc`, and desktop notifications use D-Bus. Not tested on
-  macOS or Windows.
+- Linux (main platform) and Windows 10/11 (minimal, see "Windows"). Developed
+  and used on Linux with KDE Plasma (Wayland). On Linux the daemon controller
+  reads `/proc`, and desktop notifications use D-Bus. Not tested on macOS.
 - A Firefox-family browser that can install an unsigned add-on:
   - Version 140 or later (the add-on's manifest says so); used with 153 to 156.
     The add-on does not run in private windows.
@@ -139,10 +140,12 @@ are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   `bgw daemon status` and `stop` need only Python 3. The daemon is started with
   the first `node` on the `PATH` of the process that starts it, by an absolute path.
 - `git`, `npm`, and for building the add-on file `python3`.
-- Optional, for desktop notifications when a page needs you: a notification
+- Optional, on Linux, for desktop notifications when a page needs you: a notification
   service on D-Bus, PyGObject (`gi`), and `pw-play` for the sound.
 
 ## Install from source
+
+**TL;DR**: Point your AI agent against this repository and tell it to deploy the tool and make it available as a MCP server.
 
 About ten minutes. In short: get the source, start the daemon, install the
 add-on in the browser, pair the two with a one-time code, register the MCP
@@ -345,6 +348,69 @@ the tests (see the security model). The sandbox directives of the
 service unit were checked once with a transient unit (the unit file says with
 which systemd). Starting on demand involves no systemd and is tested with real
 daemons. Read the script and the units before you use a systemd mode.
+
+## Windows
+
+Windows 10 and 11 are supported in a minimal way: no admin rights, no service,
+no autostart entry, nothing that security software usually objects to. The
+daemon is a plain process of yours. It has not been used on a real Windows
+machine by the author; see "Limits and known issues".
+
+Prerequisites:
+
+- Node.js 24 or newer (installer or zip from nodejs.org).
+- Python 3.9 or newer from python.org (the `py` launcher is used below).
+- `git`.
+- A Firefox-family browser that accepts the unsigned add-on (see
+  "Requirements").
+
+Steps:
+
+1. Clone the repository and run `npm ci` in it.
+2. Get the add-on file. `npm run xpi` uses `sh` and does not run on Windows:
+   build it on Linux, or take `browser-gateway-<version>.xpi` and
+   `SHA256SUMS.txt` from the Releases page and compare the checksum.
+3. Install the add-on in the browser (about:addons, "Install Add-on From File").
+4. Start the daemon once, by hand, so that pairing works:
+   `py -3 cli\bgw daemon start`
+5. Pair: `py -3 cli\bgw pair`, then paste the code into the add-on's options
+   page and press "Pair".
+6. Check: `py -3 cli\bgw doctor`.
+7. Register the MCP server: run `py -3 cli\bgw mcp-config` and then the command
+   it prints. It looks like this, with your own paths:
+
+       claude mcp add --scope user -e BGW_ON_DEMAND=1 browser-gateway -- <python.exe> <checkout>\cli\bgw mcp
+
+   It also prints a JSON entry for clients that take one.
+
+`BGW_ON_DEMAND=1` in that registration makes `bgw mcp` start the daemon when
+nothing listens, as described under "Ways to start the daemon". Without it,
+start the daemon yourself with `py -3 cli\bgw daemon start` and end it with
+`py -3 cli\bgw daemon stop` (`daemon status` shows whether it runs). Stop is a
+hard kill of the process; the store and the files are written so that this is
+safe.
+
+Missing compared with Linux:
+
+- No systemd, no autostart, no `tools/install.sh`, no `tools/deploy.sh`. Only
+  the plain process and the on-demand start exist.
+- No desktop notifications. `bgw status` and `bgw doctor` say "notifications:
+  not available on Windows". Parked pages and `needs_human` work as before, and
+  the operator hook (an argv array, no shell) still runs.
+- No file mode checks (see the security model, "On Windows").
+- The add-on file cannot be built on Windows.
+
+Where files live:
+
+- Config: `%LOCALAPPDATA%\browser-gateway\config`
+- Data: `%LOCALAPPDATA%\browser-gateway\data`
+- Exports: `<data>\exports`
+
+`LOCALAPPDATA` has to start with a drive letter or be a UNC share, or `bgw`
+refuses to run. The `BGW_*` path overrides work as on Linux and follow the same
+rule. Exported files get the Mark of the Web, and the export directory must be
+on NTFS. If `bgw mcp-config` warns about a `%` in a path, use the JSON entry it
+prints instead of the command line.
 
 ## Everyday use
 
@@ -716,8 +782,14 @@ alive) and the pairing.
   work in the tab you were given. A tab of yours closed at the instant a job ends
   can be dropped from the recently-closed list. The security model has the detail.
 - A daemon that was started on demand is not stopped when idle.
+- Windows support is minimal and unproven. The unit tests run on Linux with the
+  platform forced to Windows; a CI job runs the unit tests on Windows (no result
+  to report yet); a Wine smoke test (`tests/wine-smoke/`) gives only a weak
+  signal. The author has not used it on a real Windows machine. There are no
+  desktop notifications and no file mode or owner checks, and the add-on file
+  cannot be built there. See "Windows" and the security model.
 - Developed on Node 26. Node 24, the declared minimum, was run once locally with
-  the unit tests (24.21.0); the browser suites ran on Node 26 only. Linux only.
+  the unit tests (24.21.0); the browser suites ran on Node 26 only.
 
 ## Security model in short
 
@@ -860,6 +932,10 @@ nothing. In a git repository `tools/build-xpi.sh` packages only the files of
 `extension/` that git tracks: `git add` a new file before building. The CI
 workflow (`.github/workflows/ci.yml`) runs lint, the vendor check and the unit
 tests on Node 24 and 26; it has not run on a hosted runner yet.
+
+A weak Windows check: `sh tests/wine-smoke/run.sh` runs the daemon and `bgw`
+under Wine in a container (needs podman). Wine is not Windows, so a pass proves
+little.
 
 No test run reaches your desktop: the test guard `tests/helpers/no-desktop.mjs`
 fails any attempt to play a sound or post a notification except on a private
