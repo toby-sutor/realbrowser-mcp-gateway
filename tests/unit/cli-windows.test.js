@@ -978,3 +978,41 @@ say([ctl.stop("C:\\\\src", ${JSON.stringify(dir)}, 1), [c[0] for c in k.calls], 
 		false,
 	]);
 });
+
+test("Python of the Microsoft Store on Windows: known in cli/bgw and the controller by where it is installed; it starts no daemon and keeps no exports below %LOCALAPPDATA%, mcp-config warns", async () => {
+	const dir = fs.mkdtempSync(path.join(tmp, "store-"));
+	const r = await py(
+		`
+store = r"C:\\Users\\op\\AppData\\Local\\Microsoft\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\\python.exe"
+store_prefix = r"C:\\Program Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.13_3.13.5_x64__qbz5n2kfra8p0"
+plain = r"C:\\Users\\op\\AppData\\Local\\Programs\\Python\\Python313\\python.exe"
+plain_prefix = r"C:\\Users\\op\\AppData\\Local\\Programs\\Python\\Python313"
+alias = r"C:\\Users\\op\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe"
+say([[m.store_python(e, p) for e, p in ((store, plain_prefix), (plain, store_prefix), (plain, plain_prefix), (alias, plain_prefix), ("/usr/bin/python3", "/usr"))] for m in (bgw, ctl)])
+bgw.WINDOWS = ctl.WINDOWS = True
+bgw.store_python = ctl.store_python = lambda executable=None, prefix=None: True
+os.environ["LOCALAPPDATA"] = r"C:\\Users\\op\\AppData\\Local"
+try:
+    ctl.start(8791, ${JSON.stringify(REPO)}, ${JSON.stringify(path.join(dir, "config"))}, ${JSON.stringify(path.join(dir, "data"))})
+    say("started")
+except ctl.Failure as e:
+    say(str(e))
+try:
+    bgw.download_dir()
+    say("exports")
+except bgw.CliError as e:
+    say(str(e))
+os.environ["BGW_DOWNLOAD_DIR"] = r"D:\\exports"
+say(bgw.download_dir())
+`,
+	);
+	assert.equal(r.code, 0, r.stderr);
+	assert.deepEqual(r.out[0], [
+		[true, true, false, false, false],
+		[true, true, false, false, false],
+	]);
+	assert.match(r.out[1], /^bgw daemon start: this is the Python of the Microsoft Store, .* install Python from python\.org .* - nothing was started$/);
+	assert.match(r.out[2], /^no export directory: this is the Python of the Microsoft Store, .*, or set BGW_DOWNLOAD_DIR to a directory outside %LOCALAPPDATA%$/);
+	assert.equal(r.out[3], "D:\\exports");
+	assert.deepEqual(fs.readdirSync(dir), [], "nothing was made");
+});

@@ -1,0 +1,8 @@
+# LF everywhere, also in a Windows checkout: the vendored bundle is checked by its hash, tests compare bytes, and
+# bgw mcp speaks JSON lines.
+* text=auto eol=lf
+*.xpi binary
+*.png binary
+*.zip binary
+# Vendored files are checked byte for byte against their lock.
+extension/vendor/* -text

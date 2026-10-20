@@ -133,6 +133,16 @@ def windows_absolute(path: str) -> bool:
 	return re.fullmatch(WINDOWS_ABSOLUTE, path, re.DOTALL) is not None
 
 
+# Python from the Microsoft Store runs as a packaged app: what it creates below %LOCALAPPDATA% Windows puts into the
+# package's own folder instead, where node.exe and the next Python do not look. Known by where it is installed.
+STORE_PYTHON_HINT = "this is the Python of the Microsoft Store, whose files below %LOCALAPPDATA% Windows moves into a folder of its own - install Python from python.org (or winget install Python.Python.3.13) and run bgw with that one"
+
+
+def store_python(executable=None, prefix=None) -> bool:
+	places = (executable if executable is not None else sys.executable, prefix if prefix is not None else sys.base_prefix)
+	return any("\\windowsapps\\pythonsoftwarefoundation." in (p or "").replace("/", "\\").lower() for p in places)
+
+
 def default_directory(variable: str, kind: str) -> str:
 	"""The daemon's config ("config") or data ("data") directory where "variable" does not name it: the literal home
 	paths on POSIX, %LOCALAPPDATA%\\browser-gateway\\<kind> on Windows (as cli/bgw default_path and the daemon)."""
@@ -458,6 +468,8 @@ def find_node():
 def start(port: int, checkout: str, config_dir: str, data_dir: str) -> dict:
 	if sys.version_info < MIN_PYTHON:
 		raise Failure("bgw daemon start needs Python %d.%d or newer; this is Python %d.%d - nothing was started" % (MIN_PYTHON + sys.version_info[:2]))
+	if WINDOWS and store_python():
+		raise Failure("bgw daemon start: %s - nothing was started" % STORE_PYTHON_HINT)
 	if not os.path.isfile(os.path.join(checkout, MAIN)):
 		raise Failure("%s is not in %s: bgw daemon runs the daemon of the checkout this script sits in" % (MAIN, checkout))
 	node = find_node()

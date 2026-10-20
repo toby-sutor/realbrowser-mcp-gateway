@@ -253,6 +253,16 @@ def windows_absolute(path: str) -> bool:
 	return re.fullmatch(WINDOWS_ABSOLUTE, path, re.DOTALL) is not None
 
 
+# Python from the Microsoft Store runs as a packaged app: what it creates below %LOCALAPPDATA% Windows puts into the
+# package's own folder instead, where node.exe and the next Python do not look. Known by where it is installed.
+STORE_PYTHON_HINT = "this is the Python of the Microsoft Store, whose files below %LOCALAPPDATA% Windows moves into a folder of its own - install Python from python.org (or winget install Python.Python.3.13) and run bgw with that one"
+
+
+def store_python(executable=None, prefix=None) -> bool:
+	places = (executable if executable is not None else sys.executable, prefix if prefix is not None else sys.base_prefix)
+	return any("\\windowsapps\\pythonsoftwarefoundation." in (p or "").replace("/", "\\").lower() for p in places)
+
+
 def default_path(variable: str, posix: str, *windows: str, kind: str = "other") -> str:
 	"""Where a file or directory of the gateway is when the environment variable "variable" does not say.
 
@@ -1477,6 +1487,8 @@ def download_dir() -> str:
 		return paths.normpath(named)
 	path = default_path(DOWNLOAD_DIR_ENV, DEFAULT_DOWNLOAD_DIR, "data", "exports")
 	if WINDOWS:
+		if store_python():
+			raise CliError("no export directory: %s, or set %s to a directory outside %%LOCALAPPDATA%%" % (STORE_PYTHON_HINT, DOWNLOAD_DIR_ENV))
 		# Below LOCALAPPDATA, which default_path found to be an absolute path.
 		return path
 	if not os.path.isabs(path):
@@ -2363,6 +2375,9 @@ def cmd_mcp_config(args) -> int:
 	print()
 	print("  " + command)
 	print()
+	if WINDOWS and store_python():
+		print("Warning: %s." % STORE_PYTHON_HINT)
+		print()
 	if WINDOWS and "%" in command:
 		print("Note: a path above holds a %, which cmd.exe expands even between quotes: use the JSON entry below instead.")
 		print()

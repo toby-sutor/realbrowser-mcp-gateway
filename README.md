@@ -359,8 +359,12 @@ machine by the author; see "Limits and known issues".
 Prerequisites:
 
 - Node.js 24 or newer (installer or zip from nodejs.org).
-- Python 3.9 or newer from python.org (the `py` launcher is used below).
-- `git`.
+- Python 3.9 or newer from python.org (the `py` launcher is used below), not
+  the one of the Microsoft Store: Windows moves the files that one makes below
+  `%LOCALAPPDATA%` into a folder of its own, where the daemon does not look.
+  `bgw` refuses to start the daemon or keep exports with it.
+- `git`. No setting of `core.autocrlf` is needed: `.gitattributes` keeps the
+  files with LF line ends in every checkout.
 - A Firefox-family browser that accepts the unsigned add-on (see
   "Requirements").
 

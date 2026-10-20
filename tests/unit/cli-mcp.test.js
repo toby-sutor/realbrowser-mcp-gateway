@@ -510,8 +510,10 @@ test("the Windows way of waiting for stdin (a reader thread and a queue; select(
 		assert.deepEqual(await after('{"jsonrpc":"2.0","id":8,"method":"ping"}\r\n'), { jsonrpc: "2.0", id: 8, result: {} });
 		assert.deepEqual(await after("not JSON\n"), { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } });
 		// One message in two writes, and two messages in one.
+		// Two answers in one go may come in either order: JSON-RPC promises none.
 		mcp.writeRaw('{"jsonrpc":"2.0","id":9,');
-		assert.deepEqual(await after('"method":"ping"}\n{"jsonrpc":"2.0","id":10,"method":"ping"}\n'), { jsonrpc: "2.0", id: 9, result: {} });
+		mcp.writeRaw('"method":"ping"}\n{"jsonrpc":"2.0","id":10,"method":"ping"}\n');
+		assert.deepEqual(await mcp.waitFor((m) => m.id === 9, 5000), { jsonrpc: "2.0", id: 9, result: {} });
 		assert.deepEqual(await mcp.waitFor((m) => m.id === 10, 5000), { jsonrpc: "2.0", id: 10, result: {} });
 		// Larger than any message: refused once, skipped to its end.
 		const big = mcp.messages.length;
