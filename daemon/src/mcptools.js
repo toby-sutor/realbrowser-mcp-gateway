@@ -50,6 +50,11 @@ export function renderStatus(obj) {
 	return lines.join("\n");
 }
 
+// None of the tools changes anything the agent could see or undo: they load and read pages. The web ones reach out
+// to sites the agent names; the others look only into the store and the gateway.
+const READS_WEB = Object.freeze({ readOnlyHint: true, openWorldHint: true });
+const READS_STORE = Object.freeze({ readOnlyHint: true, openWorldHint: false });
+
 /**
  * Registry entries for the MCP endpoint.
  * @param {{ fetchsvc: FetchLike, status: StatusFn }} deps
@@ -87,6 +92,7 @@ export function buildTools({ fetchsvc, status }) {
 				additionalProperties: false,
 			},
 			// A caller that goes away while its page loads frees the job, as on the HTTP route.
+			annotations: READS_WEB,
 			handler: async (args, ctx) => pick(await fetchsvc.fetchPage(args, ctx)),
 		},
 		{
@@ -109,6 +115,7 @@ export function buildTools({ fetchsvc, status }) {
 				required: ["query"],
 				additionalProperties: false,
 			},
+			annotations: READS_WEB,
 			handler: async (args, ctx) => pick(await fetchsvc.searchWeb(args, ctx)),
 		},
 		{
@@ -132,6 +139,7 @@ export function buildTools({ fetchsvc, status }) {
 				required: ["page"],
 				additionalProperties: false,
 			},
+			annotations: READS_STORE,
 			handler: async (args) => pick(await fetchsvc.readPage(args)),
 		},
 		{
@@ -153,6 +161,7 @@ export function buildTools({ fetchsvc, status }) {
 				required: ["query"],
 				additionalProperties: false,
 			},
+			annotations: READS_STORE,
 			handler: async (args) => pick(await fetchsvc.searchPages(args)),
 		},
 		{
@@ -161,6 +170,7 @@ export function buildTools({ fetchsvc, status }) {
 			description:
 				"Show whether the gateway is paired, the browser extension is connected, fetching is paused, operator actions are pending, plus queue depth and store size. Use it to see why fetches fail.",
 			inputSchema: { type: "object", properties: {}, additionalProperties: false },
+			annotations: READS_STORE,
 			handler: async (args) => {
 				if (Object.keys(args).length > 0) {
 					return { isError: true, text: `Unknown argument: ${Object.keys(args)[0].slice(0, 40)}.` };

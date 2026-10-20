@@ -144,6 +144,11 @@ test("the style without a handshake (2026-07-28): discover, list and call, with 
 
 		const list = await mcp.request("tools/list", { _meta: META });
 		assert.equal(list.result.tools.length, 6);
+		// What a client may run where nothing is to change (Claude Code's plan mode): every tool but file_export.
+		assert.deepEqual(
+			Object.fromEntries(list.result.tools.map((/** @type {any} */ t) => [t.name, t.annotations?.readOnlyHint])),
+			{ browser_fetch: true, browser_search: true, page_read: true, page_search: true, gateway_status: true, file_export: false },
+		);
 		assert.deepEqual([list.result.resultType, list.result.ttlMs, list.result.cacheScope], ["complete", MCP_LIMITS.toolsTtlMs, "public"]);
 		assert.deepEqual(list.result._meta, { "io.modelcontextprotocol/serverInfo": { name: "browser-gateway", version: CLI_VERSION, title: "Browser Gateway" } });
 
@@ -352,7 +357,7 @@ test("no token file: said in the call's result, nothing sent; the handshake work
 test("the built-in tool list, the handshake answer and the versions are the daemon's own (sync test)", async () => {
 	// The tools as the daemon registers them with its default search engine.
 	const engines = makeEngines();
-	const expected = buildTools({ fetchsvc: /** @type {any} */ ({ engines: { names: [...engines.names], fallback: engines.fallback } }), status: () => ({}) }).map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema }));
+	const expected = buildTools({ fetchsvc: /** @type {any} */ ({ engines: { names: [...engines.names], fallback: engines.fallback } }), status: () => ({}) }).map((t) => ({ name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, annotations: t.annotations }));
 	const withDaemon = startMcp(env);
 	const without = startMcp({ ...env, BGW_URL: `http://127.0.0.1:${await closedPort()}` });
 	try {

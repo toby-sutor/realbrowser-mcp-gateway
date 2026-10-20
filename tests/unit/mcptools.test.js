@@ -206,12 +206,24 @@ test("descriptions: guidance for an agent, short, no marketing", () => {
 	}
 });
 
-test("tools/list result stays under about 1100 tokens", async () => {
+test("annotations: every tool reads only, the two that load pages reach the open web; tools/list carries them", async () => {
+	const r = await client(toolsFor({})).list();
+	const tools = /** @type {any} */ (r.body).result.tools;
+	assert.deepEqual(Object.fromEntries(tools.map((/** @type {any} */ t) => [t.name, t.annotations])), {
+		browser_fetch: { readOnlyHint: true, openWorldHint: true },
+		browser_search: { readOnlyHint: true, openWorldHint: true },
+		page_read: { readOnlyHint: true, openWorldHint: false },
+		page_search: { readOnlyHint: true, openWorldHint: false },
+		gateway_status: { readOnlyHint: true, openWorldHint: false },
+	});
+});
+
+test("tools/list result stays under about 1200 tokens", async () => {
 	const c = client(toolsFor({}));
 	const r = await c.list();
 	const text = JSON.stringify(/** @type {any} */ (r.body).result);
-	// 4 characters per token is the usual rule of thumb for English plus JSON. Five tools.
-	assert.ok(text.length < 4400, `serialised tools/list is ${text.length} characters`);
+	// 4 characters per token is the usual rule of thumb for English plus JSON. Five tools, with their annotations.
+	assert.ok(text.length < 4700, `serialised tools/list is ${text.length} characters`);
 	assert.ok(text.length > 1500);
 	console.log(`tools/list serialised size: ${text.length} characters`);
 });

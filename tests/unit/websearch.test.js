@@ -577,7 +577,7 @@ test("MCP: browser_search is the second of five tools; its schema is the service
 	assert.equal((await tool.handler({ query: "x", session: "auto" })).isError, true);
 	// The whole list of tools, as a client is sent it.
 	const size = JSON.stringify(buildTools({ fetchsvc: setup(t).svc, status: () => ({}) }).map(({ handler: _h, ...rest }) => rest)).length;
-	assert.ok(size < 4400, `the five tool definitions take ${size} characters`);
+	assert.ok(size < 4700, `the five tool definitions take ${size} characters`);
 });
 
 test("POST /v1/search: the agent's token, a JSON object, a rendered tool result - and the admin token is the wrong one", async () => {

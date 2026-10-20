@@ -336,8 +336,9 @@ test("file_export in bgw mcp: listed behind the daemon's tools, small, and unkno
 		const size = JSON.stringify(list.result).length;
 		const own = JSON.stringify(tool).length;
 		console.log(`tools/list through bgw mcp: ${size} characters, of which file_export ${own}; the daemon's own five tools: ${JSON.stringify(daemonTools).length}`);
-		assert.ok(own < 520, `file_export takes ${own} characters`);
-		assert.ok(size < 5000, `tools/list is ${size} characters`);
+		// With its annotations (it writes, it destroys nothing), which MCP clients read.
+		assert.ok(own < 600, `file_export takes ${own} characters`);
+		assert.ok(size < 5400, `tools/list is ${size} characters`);
 		// The daemon's own endpoint does not know the tool: it would have to write where an agent says.
 		const direct = await daemon.request("POST", "/mcp", { body: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "file_export", arguments: { file: ids.pdf } } }, headers: { "mcp-protocol-version": "2025-06-18" } });
 		assert.equal(direct.json.result?.isError ?? true, true);

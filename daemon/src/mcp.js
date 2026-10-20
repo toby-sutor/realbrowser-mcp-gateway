@@ -63,7 +63,15 @@
  * @property {string} title
  * @property {string} description
  * @property {JsonObject} inputSchema JSON Schema with type "object"
+ * @property {ToolAnnotations} [annotations] hints for the client; a client may use readOnlyHint to let a tool run
+ *   where it lets nothing change (Claude Code's plan mode)
  * @property {(args: JsonObject, ctx?: ToolContext) => Promise<ToolOutput> | ToolOutput} handler
+ *
+ * @typedef {object} ToolAnnotations MCP tool annotations (protocol 2025-03-26 on): hints, not guarantees
+ * @property {boolean} [readOnlyHint]
+ * @property {boolean} [destructiveHint]
+ * @property {boolean} [idempotentHint]
+ * @property {boolean} [openWorldHint]
  *
  * @typedef {object} ToolContext what a tool is told about its caller
  * @property {(fn: () => void) => void} [onClientGone] register a function to run when the caller stops waiting
@@ -239,6 +247,7 @@ export function createMcp({ serverInfo, tools, log, instructions = DEFAULT_INSTR
 		title: t.title,
 		description: t.description,
 		inputSchema: t.inputSchema,
+		...(t.annotations === undefined ? {} : { annotations: t.annotations }),
 	}));
 	const identity = { name: serverInfo.name, version: serverInfo.version, ...(serverInfo.title === undefined ? {} : { title: serverInfo.title }) };
 
