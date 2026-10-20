@@ -9,3 +9,5 @@ __pycache__/
 extension/dev-config.json
 web-ext-artifacts/
 .test-tmp/
+
+internal/

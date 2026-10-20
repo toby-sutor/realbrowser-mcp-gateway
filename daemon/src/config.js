@@ -178,30 +178,79 @@ export class ConfigError extends Error {
  */
 
 /**
+ * An absolute Windows path as the gateway takes it: a drive letter and a separator, or a share (two separators, a
+ * server, a share). Never one that hangs on a current drive or directory: "\\foo" counts as absolute to Node but not
+ * to every Python, and the daemon, cli/bgw and the daemon controller must agree (the same rule is in both).
+ */
+export const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/;
+
+/** @param {string | undefined} p @returns {boolean} */
+export function windowsAbsolute(p) {
+	return typeof p === "string" && WINDOWS_ABSOLUTE.test(p);
+}
+
+/**
  * Resolve settings from the environment. Pure: touches no files.
  * The defaults are built from the home directory on purpose - XDG variables are
  * remapped inside Flatpak sandboxes and would point the CLI and the daemon at
- * different places.
+ * different places. On Windows they lie under %LOCALAPPDATA%, which must then be
+ * set to an absolute path; the command line follows the same rule.
  * @param {Record<string, string | undefined>} [env]
+ * @param {NodeJS.Platform} [platform]
  * @returns {Config}
  */
-export function loadConfig(env = process.env) {
+export function loadConfig(env = process.env, platform = process.platform) {
 	const rawPort = env.BGW_PORT;
 	let port = DEFAULT_PORT;
 	if (rawPort !== undefined && rawPort !== "") {
 		if (!/^[0-9]{1,5}$/.test(rawPort) || Number(rawPort) > 65535) throw new Error(`invalid BGW_PORT: ${rawPort}`);
 		port = Number(rawPort);
 	}
-	const home = os.homedir();
-	const configDir = env.BGW_CONFIG_DIR || path.join(home, ".config", "browser-gateway");
-	const dataDir = env.BGW_DATA_DIR || path.join(home, ".local", "share", "browser-gateway");
+	const windows = platform === "win32";
+	const p = windows ? path.win32 : path;
+	/** @param {"config" | "data"} what @returns {string} */
+	const fallback = (what) => {
+		if (!windows) {
+			const home = os.homedir();
+			return what === "config" ? path.join(home, ".config", "browser-gateway") : path.join(home, ".local", "share", "browser-gateway");
+		}
+		// Asked for only where no override names the directory.
+		const base = env.LOCALAPPDATA;
+		if (!windowsAbsolute(base)) {
+			throw new Error(`LOCALAPPDATA is not set to an absolute path: set it, or BGW_${what === "config" ? "CONFIG" : "DATA"}_DIR`);
+		}
+		return p.join(/** @type {string} */ (base), "browser-gateway", what);
+	};
+	const configDir = env.BGW_CONFIG_DIR || fallback("config");
+	const dataDir = env.BGW_DATA_DIR || fallback("data");
 	for (const [name, dir] of [
 		["BGW_CONFIG_DIR", configDir],
 		["BGW_DATA_DIR", dataDir],
 	]) {
-		if (!path.isAbsolute(dir)) throw new Error(`${name} must be an absolute path`);
+		// Windows: a drive or a share, as for LOCALAPPDATA.
+		if (windows ? !windowsAbsolute(dir) : !p.isAbsolute(dir)) throw new Error(`${name} must be an absolute path`);
 	}
-	return { port, configDir: path.normalize(configDir), dataDir: path.normalize(dataDir) };
+	return { port, configDir: p.normalize(configDir), dataDir: p.normalize(dataDir) };
+}
+
+/**
+ * Windows: does a directory of the gateway lie outside the user profile (%USERPROFILE%)? Its permissions are not
+ * checked there (no mode bits): what keeps others out is the ACL of the profile, which a directory elsewhere may not
+ * have. Compared without regard to case, normalised, at a separator. Also true where USERPROFILE is not a drive or a
+ * share. Never true off Windows.
+ * @param {string} dir
+ * @param {Record<string, string | undefined>} [env]
+ * @param {NodeJS.Platform} [platform]
+ * @returns {boolean}
+ */
+export function outsideUserProfile(dir, env = process.env, platform = process.platform) {
+	if (platform !== "win32") return false;
+	const profile = env.USERPROFILE;
+	if (!windowsAbsolute(profile)) return true;
+	const norm = (/** @type {string} */ p) => path.win32.normalize(p).replace(/[\\]+$/, "").toLowerCase();
+	const base = norm(/** @type {string} */ (profile));
+	const target = norm(dir);
+	return target !== base && !target.startsWith(`${base}\\`);
 }
 
 /** @param {fs.Stats} st @param {string} what */
@@ -214,12 +263,28 @@ function assertOwned(st, what) {
 /**
  * Check a directory that may not be there: it must be one of the current user's, and is tightened to 0700 if it
  * is looser. Nothing is created. Looked at and changed through one descriptor, so that both are about the same
- * directory.
+ * directory. Windows opens no directory and has no mode bits: there it must be a real directory, not a link or a
+ * junction, and what keeps others out is the ACL of the user profile it lies in. Nothing is tightened there.
  * @param {string} dir absolute path
+ * @param {NodeJS.Platform} [platform]
  * @returns {{ exists: boolean, tightened: boolean }}
  */
-export function checkPrivateDir(dir) {
+export function checkPrivateDir(dir, platform = process.platform) {
 	if (!path.isAbsolute(dir)) throw new Error("directory path must be absolute");
+	if (platform === "win32") {
+		/** @type {fs.Stats} */
+		let st;
+		try {
+			st = fs.lstatSync(dir);
+		} catch (err) {
+			const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+			if (code === "ENOENT") return { exists: false, tightened: false };
+			if (code === "ENOTDIR") throw new Error(`${dir} is not a directory`);
+			throw err;
+		}
+		if (st.isSymbolicLink() || !st.isDirectory()) throw new Error(`${dir} is not a directory`);
+		return { exists: true, tightened: false };
+	}
 	/** @type {number} */
 	let fd;
 	try {
@@ -245,12 +310,13 @@ export function checkPrivateDir(dir) {
 /**
  * Create the directory if needed (0700) and tighten it if it is looser.
  * @param {string} dir absolute path
+ * @param {NodeJS.Platform} [platform]
  * @returns {{ tightened: boolean }}
  */
-export function ensurePrivateDir(dir) {
+export function ensurePrivateDir(dir, platform = process.platform) {
 	if (!path.isAbsolute(dir)) throw new Error("directory path must be absolute");
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-	const { exists, tightened } = checkPrivateDir(dir);
+	const { exists, tightened } = checkPrivateDir(dir, platform);
 	if (!exists) throw new Error(`${dir} is not a directory`);
 	return { tightened };
 }
@@ -273,21 +339,144 @@ export function syncDir(dir) {
 }
 
 /**
+ * How often a rename is tried on Windows, and how long is waited before each further try. A scanner that opens a
+ * file which was just written holds it for a moment, and the rename fails meanwhile (EPERM, EBUSY, EACCES).
+ */
+const RENAME_RETRY = Object.freeze({ attempts: 6, delayMs: 25 });
+const RENAME_RETRY_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+/** @param {number} ms */
+function sleepSync(ms) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * fs.renameSync, tried again a few times on Windows when the file is held for a moment. Elsewhere one plain rename.
+ * The waits block: at most about 0.8 s in all, and only when something holds the file.
+ * @param {string} from
+ * @param {string} to
+ * @param {{ platform?: NodeJS.Platform, rename?: (from: string, to: string) => void, sleep?: (ms: number) => void }} [opts]
+ *   rename, sleep: tests only
+ */
+export function renameWithRetry(from, to, { platform = process.platform, rename = fs.renameSync, sleep = sleepSync } = {}) {
+	if (platform !== "win32") return rename(from, to);
+	return retryHeld(() => rename(from, to), sleep);
+}
+
+/**
+ * fn, tried again while what it works on is held (EPERM, EBUSY, EACCES), with the waits of RENAME_RETRY.
+ * @template T
+ * @param {() => T} fn
+ * @param {(ms: number) => void} sleep
+ * @returns {T}
+ */
+function retryHeld(fn, sleep) {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			return fn();
+		} catch (err) {
+			const code = /** @type {NodeJS.ErrnoException} */ (err).code;
+			if (attempt >= RENAME_RETRY.attempts || code === undefined || !RENAME_RETRY_CODES.has(code)) throw err;
+			// 25, 50, 100, 200, 400 ms
+			sleep(RENAME_RETRY.delayMs * 2 ** (attempt - 1));
+		}
+	}
+}
+
+/** What fs.rmSync is given for a tree on Windows: Node itself tries again while a file in it is held. */
+const RM_RETRY = Object.freeze({ maxRetries: 5, retryDelay: 25 });
+
+/**
+ * @typedef {object} RemoveHow tests only
+ * @property {NodeJS.Platform} [platform]
+ * @property {(target: string, opts: fs.RmOptions) => void} [rm]
+ * @property {(ms: number) => void} [sleep]
+ */
+
+/**
+ * fs.rmSync, tried again on Windows while something holds what is removed: a tree with Node's own retries (RM_RETRY),
+ * a single file as renameWithRetry does (Node retries only where recursive is set). Elsewhere one plain fs.rmSync.
+ * @param {string} target
+ * @param {fs.RmOptions} [opts]
+ * @param {RemoveHow} [how]
+ */
+export function removeWithRetry(target, opts = {}, { platform = process.platform, rm = fs.rmSync, sleep = sleepSync } = {}) {
+	if (platform !== "win32") return rm(target, opts);
+	if (opts.recursive === true) return rm(target, { ...opts, ...RM_RETRY });
+	return retryHeld(() => rm(target, opts), sleep);
+}
+
+/**
+ * Remove what a step that failed left behind, from its catch or finally. On Windows with removeWithRetry, and a
+ * failure of it is swallowed there, so that the error of the step is the one that is thrown. Elsewhere one plain
+ * fs.rmSync, as before.
+ * @param {string} target
+ * @param {fs.RmOptions} [opts]
+ * @param {RemoveHow} [how]
+ */
+export function removeLeftover(target, opts = {}, how = {}) {
+	if ((how.platform ?? process.platform) !== "win32") return (how.rm ?? fs.rmSync)(target, opts);
+	try {
+		removeWithRetry(target, opts, how);
+	} catch {
+		// The step's own error is the one that counts; what stays has a temporary name.
+	}
+}
+
+/**
+ * Open a file, never through a link at its last component. Where there is O_NOFOLLOW the open itself refuses a link
+ * (ELOOP). Windows has none: there the name is looked at first - no link or junction, a plain file - and the
+ * descriptor is checked afterwards to be the file that was looked at (same dev and ino), so that a name swapped in
+ * between is not taken either. Both are refused as ELOOP, which every caller already takes for "no usable file".
+ * @param {string} file
+ * @param {number} flags open flags, without O_NOFOLLOW
+ * @param {number} [mode] for a file that is created
+ * @param {NodeJS.Platform} [platform]
+ * @returns {number} the descriptor; the caller closes it
+ * @throws {NodeJS.ErrnoException} ELOOP for a link, for anything but a plain file on Windows, and for a name that
+ *   changed under the open; whatever else the open throws (ENOENT, ...)
+ */
+export function openNoFollow(file, flags, mode = 0o600, platform = process.platform) {
+	if (platform !== "win32") return fs.openSync(file, flags | fs.constants.O_NOFOLLOW, mode);
+	const refused = () => Object.assign(new Error(`${file} is a link or not a regular file`), { code: "ELOOP" });
+	/** @type {fs.BigIntStats | null} */
+	let before = null;
+	try {
+		before = fs.lstatSync(file, { bigint: true });
+	} catch (err) {
+		// Not there: a file that is created is looked at once it is.
+		if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") throw err;
+	}
+	if (before !== null && (before.isSymbolicLink() || !before.isFile())) throw refused();
+	const fd = fs.openSync(file, flags, mode);
+	try {
+		const st = fs.fstatSync(fd, { bigint: true });
+		const named = before ?? fs.lstatSync(file, { bigint: true });
+		if (named.isSymbolicLink() || !st.isFile() || st.dev !== named.dev || st.ino !== named.ino) throw refused();
+		return fd;
+	} catch (err) {
+		fs.closeSync(fd);
+		throw err;
+	}
+}
+
+/**
  * Open a private file: never through a link at its last component, and checked on the open descriptor - a plain
  * file of the current user, tightened to 0600 if it is looser. What is checked is what is read or written
- * afterwards, whatever happens to the name in between.
+ * afterwards, whatever happens to the name in between. Windows has no mode bits to tighten: nothing is, there.
  * @param {string} file
- * @param {{ append?: boolean }} [opts] append: for writing at its end, and created (0600) if it is not there;
- *   otherwise for reading
+ * @param {{ append?: boolean, platform?: NodeJS.Platform }} [opts] append: for writing at its end, and created (0600)
+ *   if it is not there; otherwise for reading
  * @returns {{ fd: number, size: number, tightened: boolean } | null} null when the file does not exist; the caller closes fd
  */
-export function openPrivateFile(file, { append = false } = {}) {
+export function openPrivateFile(file, { append = false, platform = process.platform } = {}) {
 	const how = append ? fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT : fs.constants.O_RDONLY;
 	/** @type {number} */
 	let fd;
 	try {
 		// Not blocking: a name that is no file (a FIFO) must not hold the start until somebody writes to it.
-		fd = fs.openSync(file, how | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+		// Windows has no O_NONBLOCK (it adds nothing there), and refuses such a name before the open.
+		fd = openNoFollow(file, how | fs.constants.O_NONBLOCK, 0o600, platform);
 	} catch (err) {
 		const code = /** @type {NodeJS.ErrnoException} */ (err).code;
 		if (code === "ENOENT" && !append) return null;
@@ -299,7 +488,7 @@ export function openPrivateFile(file, { append = false } = {}) {
 		const st = fs.fstatSync(fd);
 		if (!st.isFile()) throw new Error(`${file} is not a regular file`);
 		assertOwned(st, file);
-		const tightened = (st.mode & 0o777) !== 0o600;
+		const tightened = platform !== "win32" && (st.mode & 0o777) !== 0o600;
 		if (tightened) fs.fchmodSync(fd, 0o600);
 		return { fd, size: st.size, tightened };
 	} catch (err) {
@@ -338,9 +527,9 @@ export function writePrivateFile(file, content) {
 		} finally {
 			fs.closeSync(fd);
 		}
-		fs.renameSync(tmp, file);
+		renameWithRetry(tmp, file);
 	} catch (err) {
-		fs.rmSync(tmp, { force: true });
+		removeLeftover(tmp, { force: true });
 		throw err;
 	}
 	syncDir(path.dirname(file));

@@ -21,6 +21,19 @@ What it does:
           never signalled.
   status  say whether that process runs and whether the port answers.
 
+On Windows (no /proc, no signals between processes) the same is done with the
+kernel32 calls any task manager uses, through ctypes, and nothing else: a
+process is known by its pid, its creation time and its image (the node.exe it
+runs), never by its command line or working directory, which would mean
+reading the memory of another process. The pid file names the checkout that
+started it. "stop" ends the process at once (TerminateProcess, on a handle that
+may end it and wait for it and do nothing else, after the process behind that
+very handle was checked again): the daemon writes every file whole by a rename
+and keeps its store journaled, so a hard stop loses at most the request under way.
+"node" is the first node.exe on the PATH; the current directory is not searched.
+The daemon is started detached, without a console window. One start at a time
+holds a lock on the file daemon.lock in the data directory.
+
 Python 3.9 or newer is needed (the daemon is started with a umask of its own,
 which subprocess.Popen takes from 3.9 on); "start" says so and does nothing
 when it runs on an older one. status and stop have no such need.
@@ -34,15 +47,17 @@ the port meanwhile gets nothing from the gateway's own clients: the CLI and
 "bgw mcp" make the listener prove itself before they send anything.
 
 Environment: BGW_CONFIG_DIR and BGW_DATA_DIR as the daemon reads them (defaults
-~/.config/browser-gateway and ~/.local/share/browser-gateway). The port is
-that of BGW_URL, which cli/bgw has checked.
+~/.config/browser-gateway and ~/.local/share/browser-gateway; on Windows
+%LOCALAPPDATA%\\browser-gateway\\config and ...\\data). The port is that of
+BGW_URL, which cli/bgw has checked.
 """
 
 import errno
-import fcntl
 import http.client
 import json
+import ntpath
 import os
+import re
 import shutil
 import signal
 import socket
@@ -50,6 +65,14 @@ import subprocess
 import sys
 import threading
 import time
+
+# What differs on Windows is chosen by this (tests set it to try the Windows ways on Linux where they can).
+WINDOWS = os.name == "nt"
+if WINDOWS:
+	import ctypes
+	import msvcrt
+else:
+	import fcntl
 
 MIN_PYTHON = (3, 9)
 PID_FILE = "daemon.pid"
@@ -65,6 +88,26 @@ LOG_ROTATE_BYTES = 10485760
 LOCK_WAIT_S = START_WAIT_S + 10.0
 # How long a start that was passed on to the host may take, from inside a sandbox.
 HOST_WAIT_S = LOCK_WAIT_S + START_WAIT_S + 15.0
+# Windows: the file the start lock is held on (POSIX locks the data directory itself), and how the daemon is
+# started: a process group of its own, no console (subprocess has the names on Windows only). A detached process
+# has no console, so there is no window to keep away either.
+LOCK_FILE = "daemon.lock"
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+DETACHED_PROCESS = 0x00000008
+# Windows: OpenProcess access to ask about a process and nothing more; GetExitCodeProcess of one that runs.
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+STILL_ACTIVE = 259
+# Windows: the access "stop" asks for, and no more: end it, ask about it, wait for it. Never PROCESS_ALL_ACCESS
+# (os.kill asks for that). WaitForSingleObject says WAIT_OBJECT_0 when the process ended.
+PROCESS_TERMINATE = 0x0001
+SYNCHRONIZE = 0x00100000
+END_ACCESS = PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+WAIT_OBJECT_0 = 0
+# Windows: how long the port may still answer after the process of the pid file ended (it closes with the process).
+SHIM_WAIT_S = 2.0
+# Windows: a file that was just written may be held for a moment (a scanner): its removal is tried this often.
+UNLINK_TRIES = 5
+UNLINK_RETRY_S = 0.05
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -79,22 +122,48 @@ class Failure(Exception):
 
 
 def in_sandbox() -> bool:
-	return os.path.isfile("/.flatpak-info")
+	return not WINDOWS and os.path.isfile("/.flatpak-info")
+
+
+# An absolute Windows path: a drive letter and a separator, or a share. The rule of cli/bgw and of the daemon.
+WINDOWS_ABSOLUTE = r"[A-Za-z]:[\\/].*|[\\/]{2}[^\\/]+[\\/][^\\/]+.*"
+
+
+def windows_absolute(path: str) -> bool:
+	return re.fullmatch(WINDOWS_ABSOLUTE, path, re.DOTALL) is not None
+
+
+def default_directory(variable: str, kind: str) -> str:
+	"""The daemon's config ("config") or data ("data") directory where "variable" does not name it: the literal home
+	paths on POSIX, %LOCALAPPDATA%\\browser-gateway\\<kind> on Windows (as cli/bgw default_path and the daemon)."""
+	if WINDOWS:
+		base = os.environ.get("LOCALAPPDATA") or ""
+		if not windows_absolute(base):
+			raise Failure("LOCALAPPDATA is not set to an absolute path: set it, or %s" % variable)
+		return ntpath.join(base, "browser-gateway", kind)
+	home = os.path.expanduser("~")
+	return os.path.join(home, ".config", "browser-gateway") if kind == "config" else os.path.join(home, ".local", "share", "browser-gateway")
 
 
 def directories() -> tuple:
 	"""The daemon's config and data directory, as the daemon itself resolves them (never XDG: a sandbox remaps it)."""
-	home = os.path.expanduser("~")
-	config = os.environ.get("BGW_CONFIG_DIR") or os.path.join(home, ".config", "browser-gateway")
-	data = os.environ.get("BGW_DATA_DIR") or os.path.join(home, ".local", "share", "browser-gateway")
+	config = os.environ.get("BGW_CONFIG_DIR") or default_directory("BGW_CONFIG_DIR", "config")
+	data = os.environ.get("BGW_DATA_DIR") or default_directory("BGW_DATA_DIR", "data")
+	paths = ntpath if WINDOWS else os.path
 	for name, path in (("BGW_CONFIG_DIR", config), ("BGW_DATA_DIR", data)):
-		if not os.path.isabs(path):
+		# Windows: a drive or a share, as for LOCALAPPDATA (and as the daemon takes them).
+		if not (windows_absolute(path) if WINDOWS else paths.isabs(path)):
 			raise Failure("%s must be an absolute path" % name)
-	return os.path.normpath(config), os.path.normpath(data)
+	return paths.normpath(config), paths.normpath(data)
 
 
 def process_info(pid: int):
-	"""What /proc says about a process: its start time, working directory and command line. None: no such process."""
+	"""What /proc says about a process: its start time, working directory and command line. None: no such process.
+
+	Windows: {"start": its creation time, "image": the full path of its program}, from windows_process_info.
+	"""
+	if WINDOWS:
+		return windows_process_info(pid)
 	try:
 		with open("/proc/%d/stat" % pid, encoding="ascii", errors="replace") as f:
 			stat = f.read()
@@ -106,6 +175,92 @@ def process_info(pid: int):
 	except (OSError, ValueError, IndexError):
 		return None
 	return {"start": start, "cwd": cwd, "argv": argv}
+
+
+_kernel32 = None
+
+
+def kernel32():
+	"""The kernel32 calls windows_process_info and windows_end make, typed. Windows only."""
+	global _kernel32
+	if _kernel32 is None:
+		dll = ctypes.WinDLL("kernel32", use_last_error=True)
+		handle, dword, boolean = ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int
+		dll.OpenProcess.argtypes, dll.OpenProcess.restype = [dword, boolean, dword], handle
+		dll.CloseHandle.argtypes, dll.CloseHandle.restype = [handle], boolean
+		dll.GetExitCodeProcess.argtypes, dll.GetExitCodeProcess.restype = [handle, ctypes.POINTER(dword)], boolean
+		dll.GetProcessTimes.argtypes, dll.GetProcessTimes.restype = [handle] + [ctypes.POINTER(ctypes.c_uint64)] * 4, boolean
+		dll.QueryFullProcessImageNameW.argtypes, dll.QueryFullProcessImageNameW.restype = [handle, dword, ctypes.c_wchar_p, ctypes.POINTER(dword)], boolean
+		dll.TerminateProcess.argtypes, dll.TerminateProcess.restype = [handle, ctypes.c_uint], boolean
+		dll.WaitForSingleObject.argtypes, dll.WaitForSingleObject.restype = [handle, dword], dword
+		_kernel32 = dll
+	return _kernel32
+
+
+def windows_process_info(pid: int):
+	"""What Windows says about a process that runs: its creation time (100 ns since 1601, as text) and the full
+	path of its image. None: no such process, one that ended (a handle may keep it known), or one this user may
+	not ask about. Asked with the least access there is; the process itself is never read from or written to."""
+	k = kernel32()
+	process = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+	if not process:
+		return None
+	try:
+		return query_process(k, process)
+	finally:
+		k.CloseHandle(process)
+
+
+def query_process(k, process):
+	"""windows_process_info, on a handle that is open already."""
+	code = ctypes.c_uint32()
+	if not k.GetExitCodeProcess(process, ctypes.byref(code)) or code.value != STILL_ACTIVE:
+		return None
+	created, ended, kernel, user = (ctypes.c_uint64() for _ in range(4))
+	if not k.GetProcessTimes(process, ctypes.byref(created), ctypes.byref(ended), ctypes.byref(kernel), ctypes.byref(user)):
+		return None
+	size = ctypes.c_uint32(32768)
+	image = ctypes.create_unicode_buffer(size.value)
+	if not k.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(size)):
+		return None
+	return {"start": str(created.value), "image": image.value}
+
+
+def windows_end(record: dict, wait_s: float) -> bool:
+	"""Windows: end the process of the pid record and wait for it. True: it ended within wait_s; False: it did not.
+
+	The handle is opened with END_ACCESS only, and the process behind it is checked again on it - creation time and
+	image as the record has them - before it is ended: a pid that was given to another process meanwhile names that
+	one, and a handle holds on to the process it was opened for. Raises Failure, and ends nothing, when the handle
+	cannot be had or the process behind it is not the one of the record.
+	"""
+	k = kernel32()
+	pid = record["pid"]
+	process = k.OpenProcess(END_ACCESS, 0, pid)
+	if not process:
+		raise Failure("process %d cannot be opened to end it (Windows error %d) - nothing was ended" % (pid, ctypes.get_last_error()))
+	try:
+		now = query_process(k, process)
+		same = ntpath.normcase
+		if now is None or now["start"] != record["start"] or not isinstance(record.get("image"), str) or same(now["image"]) != same(record["image"]):
+			raise Failure("process %d is no longer the daemon of the pid file - nothing was ended" % pid)
+		if not k.TerminateProcess(process, 1):
+			raise Failure("process %d could not be ended (Windows error %d)" % (pid, ctypes.get_last_error()))
+		return k.WaitForSingleObject(process, int(wait_s * 1000)) == WAIT_OBJECT_0
+	finally:
+		k.CloseHandle(process)
+
+
+def remove_file(path: str):
+	"""os.unlink. Windows: tried again a few times while the file is held (PermissionError); then what it raised."""
+	for attempt in range(1, UNLINK_TRIES + 1):
+		try:
+			os.unlink(path)
+			return
+		except PermissionError:
+			if not WINDOWS or attempt == UNLINK_TRIES:
+				raise
+			time.sleep(UNLINK_RETRY_S)
 
 
 def read_pid_file(path: str) -> tuple:
@@ -128,7 +283,13 @@ def read_pid_file(path: str) -> tuple:
 	pid, start, cwd, port = raw.get("pid"), raw.get("start"), raw.get("cwd"), raw.get("port")
 	if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1 or not isinstance(start, str) or not isinstance(cwd, str) or not isinstance(port, int):
 		return None, "damaged"
-	return {"pid": pid, "start": start, "cwd": cwd, "port": port, "started_at": raw.get("started_at") if isinstance(raw.get("started_at"), str) else None}, None
+	record = {"pid": pid, "start": start, "cwd": cwd, "port": port, "started_at": raw.get("started_at") if isinstance(raw.get("started_at"), str) else None}
+	if WINDOWS:
+		# A record of Windows also names the image of the process: without it, it is none of a start there.
+		if not isinstance(raw.get("image"), str):
+			return None, "damaged"
+		record["image"] = raw["image"]
+	return record, None
 
 
 def read_record(path: str):
@@ -146,16 +307,23 @@ def publish_record(pid_path: str, record: dict):
 	without such locks from both claiming it.
 	"""
 	tmp = "%s.%s.tmp" % (pid_path, os.urandom(4).hex())
-	fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+	fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
 	try:
 		with os.fdopen(fd, "wb") as f:
 			f.write((json.dumps(record) + "\n").encode("utf-8"))
 			f.flush()
 			os.fsync(f.fileno())
-		os.link(tmp, pid_path)
+		try:
+			os.link(tmp, pid_path)
+		except FileExistsError:
+			raise
+		except OSError as e:
+			if not WINDOWS:
+				raise
+			raise Failure("cannot make %s (%s): the data directory must be on an NTFS volume (a hard link is needed)" % (pid_path, e.strerror or e.__class__.__name__)) from None
 	finally:
 		try:
-			os.unlink(tmp)
+			remove_file(tmp)
 		except OSError:
 			pass
 
@@ -175,10 +343,17 @@ def sweep_temporaries(data_dir: str):
 
 
 def is_ours(record: dict, checkout: str) -> bool:
-	"""Is the process the pid file names still the daemon that was started from this checkout?"""
+	"""Is the process the pid file names still the daemon that was started from this checkout?
+
+	Windows: the very process that was started (pid and creation time), with the image it was started with, from
+	a record of this checkout. Its command line is not looked at (see the top of this file).
+	"""
 	info = process_info(record["pid"])
 	if info is None or info["start"] != record["start"]:
 		return False
+	if WINDOWS:
+		same = ntpath.normcase
+		return same(record["cwd"]) == same(checkout) and isinstance(record.get("image"), str) and same(info["image"]) == same(record["image"])
 	if record["cwd"] != checkout or info["cwd"] != checkout:
 		return False
 	return any(arg == MAIN or arg.endswith(os.sep + MAIN) for arg in info["argv"])
@@ -229,16 +404,25 @@ def start_lock(data_dir: str):
 	its turn the daemon of the first one runs, and it says so.
 	"""
 	try:
-		fd = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY)
+		if WINDOWS:
+			# No lock on a directory there: one on the first byte of a file in it, which stays behind (empty).
+			fd = os.open(os.path.join(data_dir, LOCK_FILE), os.O_RDWR | os.O_CREAT | os.O_BINARY, 0o600)
+		else:
+			fd = os.open(data_dir, os.O_RDONLY | os.O_DIRECTORY)
 	except OSError:
 		return None
 	deadline = time.monotonic() + LOCK_WAIT_S
 	while True:
 		try:
-			fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+			if WINDOWS:
+				os.lseek(fd, 0, os.SEEK_SET)
+				msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+			else:
+				fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 			return fd
 		except OSError as e:
-			if e.errno not in (errno.EAGAIN, errno.EACCES):
+			# Taken by another start: msvcrt says so with EACCES or EDEADLK, flock with EAGAIN (or EACCES).
+			if e.errno not in ((errno.EAGAIN, errno.EACCES, errno.EDEADLK) if WINDOWS else (errno.EAGAIN, errno.EACCES)):
 				# A file system without such locks: go on as before there was one.
 				os.close(fd)
 				return None
@@ -248,12 +432,35 @@ def start_lock(data_dir: str):
 			time.sleep(0.05)
 
 
+def release_lock(fd: int):
+	"""Give up the start lock: Windows lets go of a lock some time after its file is closed, so it is let go first."""
+	if WINDOWS:
+		try:
+			os.lseek(fd, 0, os.SEEK_SET)
+			msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+		except OSError:
+			pass
+	os.close(fd)
+
+
+def find_node():
+	"""The node to start: the first on the PATH. On Windows the first node.exe in a PATH entry, and the current
+	directory is not searched (shutil.which would look there first) - nor a node.cmd, which would need cmd.exe."""
+	if not WINDOWS:
+		return shutil.which("node")
+	for entry in os.environ.get("PATH", "").split(os.pathsep):
+		entry = entry.strip().strip('"')
+		if entry != "" and os.path.isfile(os.path.join(entry, "node.exe")):
+			return os.path.join(entry, "node.exe")
+	return None
+
+
 def start(port: int, checkout: str, config_dir: str, data_dir: str) -> dict:
 	if sys.version_info < MIN_PYTHON:
 		raise Failure("bgw daemon start needs Python %d.%d or newer; this is Python %d.%d - nothing was started" % (MIN_PYTHON + sys.version_info[:2]))
 	if not os.path.isfile(os.path.join(checkout, MAIN)):
 		raise Failure("%s is not in %s: bgw daemon runs the daemon of the checkout this script sits in" % (MAIN, checkout))
-	node = shutil.which("node")
+	node = find_node()
 	if node is None:
 		raise Failure("node is not on the PATH of this host")
 	if not os.path.isabs(node):
@@ -267,7 +474,7 @@ def start(port: int, checkout: str, config_dir: str, data_dir: str) -> dict:
 		return start_locked(port, checkout, node, config_dir, data_dir)
 	finally:
 		if lock is not None:
-			os.close(lock)
+			release_lock(lock)
 
 
 def start_locked(port: int, checkout: str, node: str, config_dir: str, data_dir: str) -> dict:
@@ -294,7 +501,7 @@ def start_locked(port: int, checkout: str, node: str, config_dir: str, data_dir:
 	child = None
 	published = False
 	try:
-		log = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+		log = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
 		try:
 			offset = os.fstat(log).st_size
 			env = dict(os.environ)
@@ -304,32 +511,43 @@ def start_locked(port: int, checkout: str, node: str, config_dir: str, data_dir:
 			env["BGW_PORT"] = str(port)
 			env["BGW_CONFIG_DIR"] = config_dir
 			env["BGW_DATA_DIR"] = data_dir
-			# A session of its own: it outlives this command and the terminal it was typed in.
-			child = subprocess.Popen([node, MAIN], cwd=checkout, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True, umask=0o077)
+			if WINDOWS:
+				# Detached, without a console or a window: it outlives this command and the console it was typed in.
+				# The files it makes are kept private by the ACL of the profile, not by a umask.
+				detach = {"creationflags": CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS}
+			else:
+				# A session of its own: it outlives this command and the terminal it was typed in.
+				detach = {"start_new_session": True, "umask": 0o077}
+			child = subprocess.Popen([node, MAIN], cwd=checkout, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, close_fds=True, **detach)
 		finally:
 			os.close(log)
 		# From here to the pid file a polite kill (Ctrl-C, SIGTERM, a closed terminal) waits: it would leave a
 		# daemon that nothing names. The child was started before this, so it does not inherit the block.
-		held = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+		# Windows has no signals to hold back (Ctrl-C there ends this command where it is).
+		held = None if WINDOWS else signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
 		try:
 			info = None
 			deadline = time.monotonic() + 2.0
 			while child.poll() is None and time.monotonic() < deadline:
 				seen = process_info(child.pid)
-				# Between fork and exec it would still look like this command.
-				if seen is not None and any(arg == MAIN for arg in seen["argv"]):
+				# Between fork and exec it would still look like this command. Windows has no such step.
+				if seen is not None and (WINDOWS or any(arg == MAIN for arg in seen["argv"])):
 					info = seen
 					break
 				time.sleep(0.02)
 			if info is not None:
 				record = {"pid": child.pid, "start": info["start"], "cwd": checkout, "port": port, "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+				if WINDOWS:
+					# The image as Windows names it, so that it compares with what process_info says later.
+					record["image"] = info["image"]
 				try:
 					publish_record(pid_path, record)
 				except FileExistsError:
 					raise Failure("another start is under way (%s exists)" % pid_path) from None
 				published = True
 		finally:
-			signal.pthread_sigmask(signal.SIG_SETMASK, held)
+			if held is not None:
+				signal.pthread_sigmask(signal.SIG_SETMASK, held)
 
 		deadline = time.monotonic() + START_WAIT_S
 		while time.monotonic() < deadline:
@@ -380,6 +598,8 @@ def stop(checkout: str, data_dir: str, port: int) -> dict:
 		os.unlink(pid_path)
 		return {"stopped": False, "running": False, "note": "not running (the process of the pid file is gone; the stale file was removed)"}
 	if not is_ours(record, checkout):
+		if WINDOWS:
+			raise Failure("process %d is not the daemon this checkout started (pid file: %s, image %s; process: image %s) - nothing was ended" % (record["pid"], record["cwd"], record.get("image"), info["image"]))
 		raise Failure("process %d was not started from this checkout (pid file: %s, process: %s) - nothing was signalled" % (record["pid"], record["cwd"], info["cwd"]))
 	pid = record["pid"]
 
@@ -387,6 +607,22 @@ def stop(checkout: str, data_dir: str, port: int) -> dict:
 		now = process_info(pid)
 		return now is None or now["start"] != record["start"]
 
+	if WINDOWS:
+		# TerminateProcess, a hard stop at once (a decision: see the top of this file), then the wait for it.
+		if not windows_end(record, STOP_WAIT_S):
+			raise Failure("process %d did not end" % pid)
+		try:
+			remove_file(pid_path)
+		except OSError:
+			pass
+		# A node.exe that is a launcher (Volta and its kind) starts the real one as a child of its own, which the
+		# pid file does not name and which lives on.
+		deadline = time.monotonic() + SHIM_WAIT_S
+		while answers_as_gateway(record["port"]):
+			if time.monotonic() >= deadline:
+				raise Failure("process %d ended, but a gateway daemon still answers on 127.0.0.1:%d - the node.exe on the PATH may be a launcher (Volta and the like) that started the real one; end that process by hand, and put the real node.exe first on the PATH" % (pid, record["port"]))
+			time.sleep(0.1)
+		return {"stopped": True, "running": False, "pid": pid, "note": "stopped"}
 	os.kill(pid, signal.SIGTERM)
 	deadline = time.monotonic() + STOP_WAIT_S
 	while not gone() and time.monotonic() < deadline:
@@ -425,6 +661,12 @@ def status(port: int, checkout: str, data_dir: str) -> dict:
 		elif problem == "damaged":
 			out["note"] += " (the pid file %s is not one of bgw daemon: remove it if no daemon runs)" % pid_path
 	return out
+
+
+def needs_proc():
+	"""POSIX: processes are looked up in /proc, which only Linux has in that form. Windows asks kernel32 instead."""
+	if not WINDOWS and not os.path.isdir("/proc/self"):
+		raise Failure("bgw daemon needs /proc (Linux)")
 
 
 def host_argv(action: str, port: int, script: str, json_output: bool) -> list:
@@ -479,8 +721,7 @@ def start_on_demand(port: int, script: str) -> dict:
 		if in_sandbox():
 			result = start_on_host(port, script)
 		else:
-			if not os.path.isdir("/proc/self"):
-				raise Failure("bgw daemon needs /proc (Linux)")
+			needs_proc()
 			checkout = os.path.dirname(os.path.dirname(os.path.realpath(script)))
 			config_dir, data_dir = directories()
 			result = start(port, checkout, config_dir, data_dir)
@@ -504,8 +745,7 @@ def run(action: str, port: int, script: str, json_output: bool = False) -> int:
 	try:
 		if in_sandbox():
 			return on_host(action, port, script, json_output)
-		if not os.path.isdir("/proc/self"):
-			raise Failure("bgw daemon needs /proc (Linux)")
+		needs_proc()
 		checkout = os.path.dirname(os.path.dirname(os.path.realpath(script)))
 		config_dir, data_dir = directories()
 		if action == "start":

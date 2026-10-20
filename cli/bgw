@@ -70,6 +70,13 @@ Environment:
                         that start is looked for in the config directory
   BGW_ON_DEMAND         1: start the daemon on demand in this call, whether the
                         switch is there or not; 0: never in this call
+
+On Windows the defaults are below %LOCALAPPDATA%\\browser-gateway, as the daemon
+has them: config\\ (client.token, admin.token, the switch), data\\ (pid file and
+log) and data\\exports. LOCALAPPDATA must then be an absolute path (C:\\... or a
+share); where it is not, only the BGW_* variables above say where things are. Owner and mode bits
+are not checked there: the ACL of the user profile keeps others out. Links and
+junctions in place of a token file or of the export directory are refused.
 """
 
 import argparse
@@ -79,6 +86,7 @@ import hmac
 import http.client
 import importlib.util
 import json
+import ntpath
 import os
 import queue
 import re
@@ -92,8 +100,14 @@ import threading
 import time
 import urllib.parse
 
+# Windows has no select() for pipes, no wake-up pipe for signals, no descriptors of directories: what differs
+# there is chosen by this, here and nowhere else (tests set it to try the Windows ways on Linux).
+WINDOWS = os.name == "nt"
+if WINDOWS:
+	import msvcrt
+
 DEFAULT_URL = "http://127.0.0.1:8791"
-# The literal path on purpose: sandboxes remap XDG_CONFIG_HOME, the daemon does not.
+# The literal path on purpose: sandboxes remap XDG_CONFIG_HOME, the daemon does not. On Windows: default_path().
 DEFAULT_TOKEN_FILE = "~/.config/browser-gateway/client.token"
 DEFAULT_ADMIN_TOKEN_FILE = "~/.config/browser-gateway/admin.token"
 DEFAULT_CONFIG_DIR = "~/.config/browser-gateway"
@@ -109,9 +123,24 @@ EXTENSION_POLL_S = 1.0
 
 # A token file is a line of at most 128 characters; anything larger than this is not one, and is not read further.
 TOKEN_FILE_MAX_BYTES = 512
-# st_mode: the file type bits, and a plain file (the stat module is not needed for two numbers).
+# st_mode: the file type bits, a plain file, a directory, a link (the stat module is not needed for a few numbers).
 _S_IFMT = 0o170000
 _S_IFREG = 0o100000
+_S_IFDIR = 0o040000
+_S_IFLNK = 0o120000
+# st_file_attributes (Windows only): a reparse point. st_reparse_tag: one that names another place (a name surrogate:
+# a link, a junction) - as Node takes it. Others (OneDrive placeholders, deduplicated files) are files like any.
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+_IO_REPARSE_TAG_NAME_SURROGATE = 0x20000000
+# Windows: the Mark of the Web, written next to an exported file (its Zone.Identifier stream): from the Internet zone.
+ZONE_IDENTIFIER = b"[ZoneTransfer]\r\nZoneId=3\r\n"
+# Windows: a file that was just written may be held for a moment (a scanner): its removal is tried this often.
+UNLINK_TRIES = 5
+UNLINK_RETRY_S = 0.05
+# Open flags that one of the two systems lacks: 0 there. O_BINARY keeps Windows from changing line ends.
+_O_BINARY = getattr(os, "O_BINARY", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -214,10 +243,58 @@ def daemon_port():
 	return port
 
 
+# An absolute Windows path: a drive letter and a separator, or a share (two separators, a server, a share). Never
+# one that hangs on a current drive or directory. The rule of the daemon (daemon/src/config.js) and of the daemon
+# controller; not ntpath.isabs, which takes "\\x" on some versions of Python and not on others.
+WINDOWS_ABSOLUTE = r"[A-Za-z]:[\\/].*|[\\/]{2}[^\\/]+[\\/][^\\/]+.*"
+
+
+def windows_absolute(path: str) -> bool:
+	return re.fullmatch(WINDOWS_ABSOLUTE, path, re.DOTALL) is not None
+
+
+def default_path(variable: str, posix: str, *windows: str, kind: str = "other") -> str:
+	"""Where a file or directory of the gateway is when the environment variable "variable" does not say.
+
+	POSIX: the literal home path "posix". Windows: the parts "windows" below %LOCALAPPDATA%\\browser-gateway, as
+	the daemon resolves them. Raises CliError (of "kind") when LOCALAPPDATA is not an absolute path there.
+	"""
+	if not WINDOWS:
+		return os.path.expanduser(posix)
+	base = os.environ.get("LOCALAPPDATA") or ""
+	if not windows_absolute(base):
+		raise CliError("LOCALAPPDATA is not set to an absolute path: set it, or %s" % variable, kind=kind)
+	return ntpath.normpath(ntpath.join(base, "browser-gateway", *windows))
+
+
+def overridden(variable: str, kind: str = "other"):
+	"""The path the environment variable names, or None where it names none. Windows: only a drive or a share
+	(windows_absolute), as the daemon takes it; anything else raises CliError (of "kind"). POSIX: as it is."""
+	value = os.environ.get(variable)
+	if not value:
+		return None
+	if WINDOWS and not windows_absolute(value):
+		raise CliError("%s must be an absolute path" % variable, kind=kind)
+	return value
+
+
 def token_path(role):
 	if role == "admin":
-		return os.environ.get("BGW_ADMIN_TOKEN_FILE") or os.path.expanduser(DEFAULT_ADMIN_TOKEN_FILE)
-	return os.environ.get("BGW_TOKEN_FILE") or os.path.expanduser(DEFAULT_TOKEN_FILE)
+		return overridden("BGW_ADMIN_TOKEN_FILE", "token") or default_path("BGW_ADMIN_TOKEN_FILE", DEFAULT_ADMIN_TOKEN_FILE, "config", "admin.token", kind="token")
+	return overridden("BGW_TOKEN_FILE", "token") or default_path("BGW_TOKEN_FILE", DEFAULT_TOKEN_FILE, "config", "client.token", kind="token")
+
+
+def _reparse(st) -> bool:
+	"""Is this (Windows) a link, a junction or another reparse point that names another place? Never on POSIX: no
+	such attribute there. A reparse point of another kind (a OneDrive placeholder, a deduplicated file) is not."""
+	if not getattr(st, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT:
+		return False
+	return bool(getattr(st, "st_reparse_tag", 0) & _IO_REPARSE_TAG_NAME_SURROGATE)
+
+
+def _plain(st) -> bool:
+	"""A plain file, and on Windows not a reparse point either."""
+	return st.st_mode & _S_IFMT == _S_IFREG and not _reparse(st)
 
 
 def read_token(role):
@@ -227,10 +304,30 @@ def read_token(role):
 	opened must be a plain file of this user that nobody else can read or write. A pipe or a device in
 	that place would block this process or fill its memory, so it is never read; the read is bounded.
 	A link higher up the path (a home directory that is one) is fine: only the file itself is checked.
+	On Windows owner and mode are not looked at (see open_token_windows).
 	"""
 	path = token_path(role)
+	fd = open_token_windows(path) if WINDOWS else open_token(path)
 	try:
-		fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+		try:
+			raw = os.read(fd, TOKEN_FILE_MAX_BYTES + 1)
+		except OSError as e:
+			raise CliError("cannot read token file %s: %s" % (path, e.strerror or "not readable"), kind="token") from None
+	finally:
+		os.close(fd)
+	try:
+		token = raw.decode("ascii").strip() if len(raw) <= TOKEN_FILE_MAX_BYTES else ""
+	except UnicodeDecodeError:
+		token = ""
+	if not re.fullmatch(r"[A-Za-z0-9_-]{20,128}", token):
+		raise CliError("token file %s is empty or damaged" % path, kind="token")
+	return token
+
+
+def open_token(path: str) -> int:
+	"""POSIX: the token file, opened without following a link and checked by its descriptor. Returns the descriptor."""
+	try:
+		fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW | _O_NONBLOCK)
 	except FileNotFoundError:
 		raise CliError("token file not found: %s (start the daemon once to create it)" % path, kind="token") from None
 	except OSError as e:
@@ -246,19 +343,42 @@ def read_token(role):
 			raise CliError("cannot read token file %s: it belongs to another user" % path, kind="token")
 		if st.st_mode & 0o077:
 			raise CliError("cannot read token file %s: others can read or write it (mode %04o), run chmod 600 on it" % (path, st.st_mode & 0o7777), kind="token")
-		try:
-			raw = os.read(fd, TOKEN_FILE_MAX_BYTES + 1)
-		except OSError as e:
-			raise CliError("cannot read token file %s: %s" % (path, e.strerror or "not readable"), kind="token") from None
-	finally:
+	except BaseException:
 		os.close(fd)
+		raise
+	return fd
+
+
+def open_token_windows(path: str) -> int:
+	"""Windows: the token file, looked at before it is opened (there is no O_NOFOLLOW) and checked again by its
+	descriptor: the same file, a plain one. Returns the descriptor.
+
+	No owner and no mode bits: there are none to speak of. The ACL of the user profile, below which the token
+	files lie, keeps other users out - a decision (docs/SECURITY-MODEL.md). A link or junction in the last place
+	is refused, as on POSIX.
+	"""
 	try:
-		token = raw.decode("ascii").strip() if len(raw) <= TOKEN_FILE_MAX_BYTES else ""
-	except UnicodeDecodeError:
-		token = ""
-	if not re.fullmatch(r"[A-Za-z0-9_-]{20,128}", token):
-		raise CliError("token file %s is empty or damaged" % path, kind="token")
-	return token
+		seen = os.lstat(path)
+	except FileNotFoundError:
+		raise CliError("token file not found: %s (start the daemon once to create it)" % path, kind="token") from None
+	except OSError as e:
+		raise CliError("cannot read token file %s: %s" % (path, e.strerror or "not readable"), kind="token") from None
+	if _reparse(seen) or seen.st_mode & _S_IFMT == _S_IFLNK:
+		raise CliError("cannot read token file %s: it is a link, and a token file must be a plain file" % path, kind="token")
+	if not _plain(seen):
+		raise CliError("cannot read token file %s: it is not a plain file" % path, kind="token")
+	try:
+		fd = os.open(path, os.O_RDONLY | _O_BINARY | _O_NOFOLLOW)
+	except OSError as e:
+		raise CliError("cannot read token file %s: %s" % (path, e.strerror or "not readable"), kind="token") from None
+	try:
+		st = os.fstat(fd)
+		if not _plain(st) or (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino):
+			raise CliError("cannot read token file %s: it changed while it was opened" % path, kind="token")
+	except BaseException:
+		os.close(fd)
+		raise
+	return fd
 
 
 def b64url(raw):
@@ -298,8 +418,12 @@ def on_demand() -> bool:
 		return True
 	if forced == "0":
 		return False
-	directory = os.environ.get("BGW_CONFIG_DIR") or os.path.expanduser(DEFAULT_CONFIG_DIR)
-	return os.path.isabs(directory) and os.path.isfile(os.path.join(directory, ON_DEMAND_MARKER))
+	try:
+		directory = overridden("BGW_CONFIG_DIR") or default_path("BGW_CONFIG_DIR", DEFAULT_CONFIG_DIR, "config")
+	except CliError:
+		# No place to look in (Windows without LOCALAPPDATA, or an override that is no drive or share): no switch.
+		return False
+	return (WINDOWS or os.path.isabs(directory)) and os.path.isfile(os.path.join(directory, ON_DEMAND_MARKER))
 
 
 class Daemon:
@@ -538,7 +662,7 @@ def write_new_file(path, data, force):
 	no symlink is followed. With force the data goes to a new file next to it that
 	then takes its place: a symlink at that path is replaced, not written through.
 	"""
-	flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+	flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY
 	if not force:
 		try:
 			fd = os.open(path, flags, 0o600)
@@ -626,6 +750,37 @@ def download_file(daemon, file_id, write, begin=None):
 	return info
 
 
+class NoLink(CliError):
+	"""Windows: the directory's file system makes no hard links (FAT, exFAT, many shares), which a new file needs to
+	get its name without replacing one that is there."""
+
+	def __init__(self, path, error):
+		super().__init__("cannot write %s (%s): the directory must be on an NTFS volume (a hard link is needed)" % (path, error.strerror or error.__class__.__name__))
+
+
+def mark_downloaded(path: str):
+	"""Windows: the Mark of the Web on a file that came from the web (its Zone.Identifier stream, Internet zone), so
+	that Windows warns before it is opened or run, as for a file a browser saved. Best effort: a file system without
+	such streams (FAT, a share) keeps the file unmarked."""
+	try:
+		with open(path + ":Zone.Identifier", "wb") as f:
+			f.write(ZONE_IDENTIFIER)
+	except OSError:
+		pass
+
+
+def remove_file(path: str, dir_fd=None):
+	"""os.unlink. Windows: tried again a few times while the file is held (PermissionError); then what it raised."""
+	for attempt in range(1, UNLINK_TRIES + 1):
+		try:
+			os.unlink(path, dir_fd=dir_fd)
+			return
+		except PermissionError:
+			if not WINDOWS or attempt == UNLINK_TRIES:
+				raise
+			time.sleep(UNLINK_RETRY_S)
+
+
 class NewFile:
 	"""A file that is written next to where it will lie and put in place only when it is complete.
 
@@ -643,7 +798,7 @@ class NewFile:
 		directory = os.path.dirname(os.path.abspath(path))
 		self.tmp = os.path.join(directory, ".bgw-export-%s.tmp" % secrets.token_hex(6))
 		try:
-			fd = os.open(self.tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+			fd = os.open(self.tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, 0o600)
 		except OSError as e:
 			raise CliError("cannot write %s: %s" % (path, e.strerror or "error")) from None
 		self.file = os.fdopen(fd, "wb")
@@ -671,13 +826,26 @@ class NewFile:
 			self.file.close()
 			if self.force:
 				os.replace(self.tmp, self.path)
+				if WINDOWS:
+					mark_downloaded(self.path)
 				return
 			try:
 				# A second name for the finished file: fails if that name is taken, and never replaces anything.
 				os.link(self.tmp, self.path)
 			except FileExistsError:
 				raise CliError("%s exists; use --force to overwrite it" % self.path) from None
-			os.unlink(self.tmp)
+			except OSError as e:
+				if WINDOWS:
+					raise NoLink(self.path, e) from None
+				raise
+			if WINDOWS:
+				mark_downloaded(self.path)
+			try:
+				remove_file(self.tmp)
+			except OSError:
+				if not WINDOWS:
+					raise
+				# Held for longer than the retries (a scanner): the file is in place, a second name of it stays behind.
 		except OSError as e:
 			raise CliError("cannot write %s: %s" % (self.path, e.strerror or "error")) from None
 		finally:
@@ -710,7 +878,7 @@ def export_file(args, daemon):
 		except OSError as e:
 			raise CliError("cannot write into %s: %s" % (directory, e.strerror or "error")) from None
 		finally:
-			os.close(dir_fd)
+			close_download_dir(dir_fd)
 		written = os.path.join(directory, final)
 	else:
 		target = NewFile(args.output, args.force)
@@ -840,6 +1008,8 @@ def cmd_status(args, daemon):
 	print("store:     %s page(s), %s with content%s" % (clean(store.get("pages", "?")), clean(store.get("stored", "?")), ", %d file(s)%s" % (files, size) if whole(files) and files > 0 else ""))
 	if status.get("audit_ok") is False:
 		print("audit:     FAILED - the daemon refuses work until the log can be written again (free disk space?)")
+	if status.get("notifications") == "unavailable":
+		print("notifications: not available on Windows")
 	return EXIT_OK
 
 
@@ -959,6 +1129,9 @@ def cmd_doctor(args, daemon):
 		report["versions"]["daemon"] = clean(version) if isinstance(version, str) else None
 		for key in ("paired", "extension_connected", "paused", "audit_ok"):
 			report[key] = status.get(key) if isinstance(status.get(key), bool) else None
+		if status.get("notifications") == "unavailable":
+			# A daemon on Windows: no desktop notifications there. Absent elsewhere, and then not in the report either.
+			report["notifications"] = "unavailable"
 		if report["paired"] is not True:
 			report["problem"] = "the extension is not paired: run bgw pair and paste the code into its options page"
 		elif report["extension_connected"] is not True:
@@ -999,6 +1172,8 @@ def cmd_doctor(args, daemon):
 		print("extension: %s" % ("connected" if report["extension_connected"] is True else "NOT connected"))
 		print("paused:    %s" % ("YES" if report["paused"] is True else "no"))
 		print("audit:     %s" % ("ok" if report["audit_ok"] is True else "FAILED"))
+		if report.get("notifications") == "unavailable":
+			print("notifications: not available on Windows")
 	parts = []
 	for name in ("cli", "daemon", "extension", "browser"):
 		if v[name]:
@@ -1294,12 +1469,16 @@ def numbered(name: str, n: int) -> str:
 
 def download_dir() -> str:
 	"""The export directory: the one the environment names, or the gateway's own below the home directory."""
-	named = os.environ.get(DOWNLOAD_DIR_ENV)
+	named = overridden(DOWNLOAD_DIR_ENV)
 	if named:
-		if not os.path.isabs(named):
+		paths = ntpath if WINDOWS else os.path
+		if not paths.isabs(named):
 			raise CliError("%s must be an absolute path" % DOWNLOAD_DIR_ENV)
-		return os.path.normpath(named)
-	path = os.path.expanduser(DEFAULT_DOWNLOAD_DIR)
+		return paths.normpath(named)
+	path = default_path(DOWNLOAD_DIR_ENV, DEFAULT_DOWNLOAD_DIR, "data", "exports")
+	if WINDOWS:
+		# Below LOCALAPPDATA, which default_path found to be an absolute path.
+		return path
 	if not os.path.isabs(path):
 		raise CliError("there is no home directory to keep exported files in: set %s to an absolute path" % DOWNLOAD_DIR_ENV)
 	return os.path.normpath(path)
@@ -1309,8 +1488,9 @@ class NoRoom(CliError):
 	"""The export directory holds as much as it may: the next file is not written."""
 
 
-def open_download_dir(path: str) -> int:
-	"""Open the export directory, making it (0700) if it is not there. Returns a descriptor of the directory.
+def open_download_dir(path: str, by_path=None):
+	"""Open the export directory, making it (0700) if it is not there. Returns a descriptor of the directory, or
+	on Windows its path (by_path: tests choose; else Windows only). Either is handed back to close_download_dir.
 
 	The directory itself must be a real directory, owned by this user, that
 	nobody else can write to: a symlink in its place is refused, not followed,
@@ -1321,7 +1501,12 @@ def open_download_dir(path: str) -> int:
 	directory is made with what leads to it; one the environment names must
 	have its parent already. Part files that an export killed in the middle
 	left behind, a day old or more, are removed here.
+
+	Windows has no descriptors of directories: the directory is looked at by its path (a real directory, not a
+	link or junction), and so is every name in it before it is used (see _at). Owner and mode are not looked
+	at there: the ACL of the user profile keeps others out (docs/SECURITY-MODEL.md).
 	"""
+	by_path = WINDOWS if by_path is None else by_path
 	problem = "cannot make the export directory %s: %s"
 	if not os.environ.get(DOWNLOAD_DIR_ENV):
 		try:
@@ -1334,6 +1519,15 @@ def open_download_dir(path: str) -> int:
 		pass
 	except OSError as e:
 		raise CliError(problem % (path, e.strerror or "error")) from None
+	if by_path:
+		try:
+			st = os.lstat(path)
+		except OSError as e:
+			raise CliError("the export directory %s cannot be used (%s): it must be a real directory, not a link" % (path, e.strerror or "error")) from None
+		if st.st_mode & _S_IFMT != _S_IFDIR or _reparse(st):
+			raise CliError("the export directory %s cannot be used (it is a link or not a directory): it must be a real directory, not a link" % path)
+		sweep_leftovers(path)
+		return path
 	try:
 		dir_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 	except OSError as e:
@@ -1351,63 +1545,99 @@ def open_download_dir(path: str) -> int:
 	return dir_fd
 
 
-def sweep_leftovers(dir_fd: int):
+def close_download_dir(where):
+	"""Let go of what open_download_dir returned."""
+	if isinstance(where, int):
+		os.close(where)
+
+
+def _at(where, name: str) -> tuple:
+	"""A name in the export directory, as the os calls take it: (name, descriptor of the directory) where there is
+	one, else (the full path, None). where is what open_download_dir returned."""
+	if isinstance(where, str):
+		return os.path.join(where, name), None
+	return name, where
+
+
+def _own(st) -> bool:
+	"""Is the file this user's? Windows has no owner here to compare (the profile's ACL stands in): yes."""
+	return WINDOWS or st.st_uid == os.geteuid()
+
+
+def sweep_leftovers(where):
 	"""Remove what a killed export left in the directory: part files and temporary files of this tool, old, ours.
 
 	Only names this tool makes (a fixed prefix and random hex), only plain files of this user, only when
 	EXPORT_LEFTOVER_AGE_S old: the part file of an export that is under way now is younger. Never an error.
 	"""
 	try:
-		names = os.listdir(dir_fd)
+		names = os.listdir(where)
 	except OSError:
 		return
 	cutoff = time.time() - EXPORT_LEFTOVER_AGE_S
 	for name in names:
 		if not re.fullmatch(r"\.bgw-(part-[0-9a-f]{16}|export-[0-9a-f]{12}\.tmp)", name):
 			continue
+		at, dir_fd = _at(where, name)
 		try:
-			st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
-			if st.st_mode & _S_IFMT == _S_IFREG and st.st_uid == os.geteuid() and st.st_mtime < cutoff:
-				os.unlink(name, dir_fd=dir_fd)
+			st = os.stat(at, dir_fd=dir_fd, follow_symlinks=False)
+			if _plain(st) and _own(st) and st.st_mtime < cutoff:
+				os.unlink(at, dir_fd=dir_fd)
 		except OSError:
 			pass
 
 
-def directory_bytes(dir_fd: int) -> int:
+def directory_bytes(where) -> int:
 	"""What the plain files in the directory add up to. Links are not followed and not counted."""
 	total = 0
-	for name in os.listdir(dir_fd):
+	for name in os.listdir(where):
+		if WINDOWS and name.startswith(".bgw-part-"):
+			# A part file there may be a second name of a finished export that could not be removed (held): its
+			# bytes are counted under the other name. The part file of an export under way holds nothing yet.
+			continue
+		at, dir_fd = _at(where, name)
 		try:
-			st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+			st = os.stat(at, dir_fd=dir_fd, follow_symlinks=False)
 		except OSError:
 			continue
-		if st.st_mode & _S_IFMT == _S_IFREG:
+		if _plain(st):
 			total += st.st_size
 	return total
 
 
-def has_content(dir_fd: int, name: str, size: int, sha256: str) -> bool:
+def has_content(where, name: str, size: int, sha256: str) -> bool:
 	"""Is there a plain file of this user called name in the directory with exactly this size and SHA-256?
 
 	The bytes on disk are hashed; the name says nothing. A link or anything but a plain file is not it.
 	"""
+	at, dir_fd = _at(where, name)
+	seen = None
 	try:
-		fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+		if dir_fd is None:
+			# No O_NOFOLLOW on Windows: looked at first, and what is opened must be what was looked at.
+			seen = os.lstat(at)
+			if not _plain(seen):
+				return False
+			fd = os.open(at, os.O_RDONLY | _O_BINARY | _O_NOFOLLOW | _O_NONBLOCK)
+		else:
+			fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
 	except OSError:
 		return False
 	try:
 		st = os.fstat(fd)
-		if st.st_mode & _S_IFMT != _S_IFREG or st.st_uid != os.geteuid() or st.st_size != size:
+		if not _plain(st) or not _own(st) or st.st_size != size:
+			return False
+		if seen is not None and (st.st_dev, st.st_ino) != (seen.st_dev, seen.st_ino):
 			return False
 		digest = hashlib.sha256()
-		seen = 0
+		seen_bytes = 0
 		while True:
 			piece = os.read(fd, 1048576)
 			if not piece:
 				break
 			digest.update(piece)
-			seen += len(piece)
-		return seen == size and hmac.compare_digest(digest.hexdigest(), sha256)
+			seen_bytes += len(piece)
+		return seen_bytes == size and hmac.compare_digest(digest.hexdigest(), sha256)
 	except OSError:
 		return False
 	finally:
@@ -1422,8 +1652,8 @@ class _Already(Exception):
 		self.name = name
 
 
-def save_download(dir_fd: int, fetch, name_of, limit: int = EXPORT_DIR_MAX_BYTES) -> tuple:
-	"""Write one file into the directory behind dir_fd.
+def save_download(where, fetch, name_of, limit: int = EXPORT_DIR_MAX_BYTES) -> tuple:
+	"""Write one file into the export directory, as open_download_dir returned it.
 
 	fetch(write, begin) delivers the bytes, calls begin(what is known of the file)
 	before the first of them, and returns that; name_of(that) says what to call
@@ -1436,7 +1666,8 @@ def save_download(dir_fd: int, fetch, name_of, limit: int = EXPORT_DIR_MAX_BYTES
 	before any of it is written. Returns (the name it got, what fetch returned).
 	"""
 	part = ".bgw-part-%s" % secrets.token_hex(8)
-	fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd)
+	part_at, dir_fd = _at(where, part)
+	fd = os.open(part_at, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, 0o600, dir_fd=dir_fd)
 	known = {}
 
 	def begin(info):
@@ -1445,14 +1676,14 @@ def save_download(dir_fd: int, fetch, name_of, limit: int = EXPORT_DIR_MAX_BYTES
 		for n in range(1, 1000):
 			final = numbered(name, n)
 			try:
-				os.stat(final, dir_fd=dir_fd, follow_symlinks=False)
+				os.stat(_at(where, final)[0], dir_fd=dir_fd, follow_symlinks=False)
 			except FileNotFoundError:
 				break
 			except OSError:
 				continue
-			if has_content(dir_fd, final, info["size"], info["sha256"]):
+			if has_content(where, final, info["size"], info["sha256"]):
 				raise _Already(final)
-		used = directory_bytes(dir_fd)
+		used = directory_bytes(where)
 		if used + info["size"] > limit:
 			raise NoRoom("it holds %d MiB and this file is %d MiB, the limit is %d MiB; delete files in it that are no longer needed, then try again" % (used // 1048576, -(-info["size"] // 1048576), limit // 1048576))
 
@@ -1468,15 +1699,24 @@ def save_download(dir_fd: int, fetch, name_of, limit: int = EXPORT_DIR_MAX_BYTES
 		for n in range(1, 1000):
 			final = numbered(name, n)
 			try:
-				# A second name for the finished file: fails where that name is taken, follows no link.
-				os.link(part, final, src_dir_fd=dir_fd, dst_dir_fd=dir_fd, follow_symlinks=False)
-				return final, info
+				# A second name for the finished file: fails where that name is taken (a link there too), follows no link.
+				if dir_fd is None:
+					os.link(part_at, _at(where, final)[0])
+				else:
+					os.link(part, final, src_dir_fd=dir_fd, dst_dir_fd=dir_fd, follow_symlinks=False)
 			except FileExistsError:
 				continue
+			except OSError as e:
+				if WINDOWS:
+					raise NoLink(_at(where, final)[0], e) from None
+				raise
+			if WINDOWS and dir_fd is None:
+				mark_downloaded(_at(where, final)[0])
+			return final, info
 		raise CliError("no free name for the file in the export directory")
 	finally:
 		try:
-			os.unlink(part, dir_fd=dir_fd)
+			remove_file(part_at, dir_fd=dir_fd)
 		except OSError:
 			pass
 
@@ -1520,6 +1760,86 @@ class McpCall:
 			daemon.abort()
 
 
+class PipeInput:
+	"""How "bgw mcp" waits for stdin on POSIX: select() on stdin and on a pipe of its own, which a signal
+	(signal.set_wakeup_fd) or wake() writes to. Only the main thread may make one, as for signal handlers."""
+
+	def __init__(self, fd: int):
+		self.fd = fd
+		self.wake_r, self.wake_w = os.pipe()
+		os.set_blocking(self.wake_w, False)
+		os.set_blocking(self.wake_r, False)
+		self.previous = signal.set_wakeup_fd(self.wake_w)
+
+	def wake(self):
+		try:
+			os.write(self.wake_w, b"x")
+		except OSError:
+			pass
+
+	def next(self):
+		"""What stdin gave: bytes, b"" at its end, None when nothing came within a second or on a wake-up."""
+		readable, _, _ = select.select([self.fd, self.wake_r], [], [], 1.0)
+		if self.wake_r in readable:
+			try:
+				os.read(self.wake_r, 64)
+			except OSError:
+				pass
+			return None
+		if self.fd not in readable:
+			return None
+		try:
+			return os.read(self.fd, 65536)
+		except BlockingIOError:
+			return None
+		except OSError:
+			return b""
+
+	def close(self):
+		signal.set_wakeup_fd(self.previous)
+		os.close(self.wake_r)
+		os.close(self.wake_w)
+
+
+class ThreadInput:
+	"""How "bgw mcp" waits for stdin on Windows, where select() takes sockets only and a signal wakes no pipe:
+	a thread reads stdin, blocking, and hands each piece over through a queue. The queue is short, so a client
+	that sends faster than its requests are taken in waits on its pipe, as it would on POSIX."""
+
+	def __init__(self, fd: int):
+		self.fd = fd
+		self.pieces = queue.Queue(16)
+		threading.Thread(target=self._read, name="bgw-mcp-in", daemon=True).start()
+
+	def _read(self):
+		while True:
+			try:
+				piece = os.read(self.fd, 65536)
+			except OSError:
+				piece = b""
+			self.pieces.put(piece)
+			if piece == b"":
+				return
+
+	def wake(self):
+		try:
+			self.pieces.put_nowait(None)
+		except queue.Full:
+			# Something is there to be taken already: the loop looks at stop then.
+			pass
+
+	def next(self):
+		"""As PipeInput.next. A signal is seen within the second the wait lasts (its handler only sets stop)."""
+		try:
+			return self.pieces.get(timeout=1.0)
+		except queue.Empty:
+			return None
+
+	def close(self):
+		# The thread may be left in its read: it holds nothing, and ends with the process.
+		pass
+
+
 class McpServer:
 	"""bgw mcp: the gateway's MCP tools for a client that talks over stdin and stdout.
 
@@ -1531,11 +1851,14 @@ class McpServer:
 	request tries again.
 	"""
 
-	def __init__(self, stdin_fd=0, stdout_fd=1):
+	def __init__(self, stdin_fd=0, stdout_fd=1, threaded=None):
 		# Settled once, before any token is read: where requests go.
 		self.port = daemon_port()
 		self.stdin_fd = stdin_fd
 		self.stdout_fd = stdout_fd
+		# How stdin is waited for and stdout written to: ThreadInput and blocking writes on Windows, else PipeInput and
+		# select(). Tests choose the Windows way on Linux with threaded=True.
+		self.threaded = WINDOWS if threaded is None else threaded
 		self.state_lock = threading.Lock()
 		self.calls = []
 		# What is to be written to stdout, in order: one thread writes, so that nothing else ever waits on a client
@@ -1543,7 +1866,7 @@ class McpServer:
 		self.outbox = queue.Queue(MCP_MAX_UNWRITTEN)
 		# Answers that are in the outbox and not written yet.
 		self.unsent = 0
-		self.wake_w = None
+		self.input = None
 		self.tools = None
 		self.negotiated = None
 		self.last_state = None
@@ -1577,11 +1900,9 @@ class McpServer:
 		with self.state_lock:
 			self.closing = True
 		self.stop = True
-		if self.wake_w is not None:
-			try:
-				os.write(self.wake_w, b"x")
-			except OSError:
-				pass
+		waiting = self.input
+		if waiting is not None:
+			waiting.wake()
 
 	def _write_loop(self):
 		"""The one thread that writes to stdout."""
@@ -1595,7 +1916,12 @@ class McpServer:
 					try:
 						written = os.write(self.stdout_fd, view)
 					except BlockingIOError:
-						select.select([], [self.stdout_fd], [], 1.0)
+						# A stdout that does not block (POSIX): wait until it takes more. On Windows writes block, and
+						# select() would not take a pipe: this is not reached there but for an odd handle, which gets a pause.
+						if self.threaded:
+							time.sleep(0.05)
+						else:
+							select.select([], [self.stdout_fd], [], 1.0)
 						continue
 					view = view[written:]
 			except OSError:
@@ -1792,18 +2118,20 @@ class McpServer:
 			return self._tool_error(message, "[browser-gateway] outcome=error code=export_refused\naction: The gateway did not hand out that file: %s" % e)
 		except NoRoom as e:
 			return self._tool_error(message, "[browser-gateway] outcome=error code=export_dir_full\naction: The export directory %s is full: %s. Nothing was written. Tell the user." % (clean(directory), clean(str(e))))
+		except NoLink as e:
+			return self._tool_error(message, "[browser-gateway] outcome=error code=write_failed\naction: %s. Nothing was written. Tell the user." % clean(str(e)))
 		except OSError as e:
 			return self._tool_error(message, "[browser-gateway] outcome=error code=write_failed\naction: The file could not be written into the export directory (%s). Tell the user." % clean(e.strerror or e.__class__.__name__))
 		finally:
 			daemon.close()
 			if dir_fd is not None:
-				os.close(dir_fd)
+				close_download_dir(dir_fd)
 		lines = [
 			"[browser-gateway] outcome=ok kind=file_export file=%s" % file_id,
 			"file: type=%s size=%d sha256=%s" % (info["type"], info["size"], info["sha256"]),
 			# Made of the directory this helper was given and of a name made here: nothing of it is a server's.
 			"path: %s" % clean(os.path.join(directory, final)),
-			"mode: 0600 - written as it was retrieved; nothing opened, unpacked or rendered it.",
+			"%s - written as it was retrieved; nothing opened, unpacked or rendered it." % ("access: that of the export directory (Windows)" if WINDOWS else "mode: 0600"),
 			FILE_WARNING,
 		]
 		shown = label(info["name"])
@@ -1906,17 +2234,20 @@ class McpServer:
 
 	def run(self) -> int:
 		"""Serve until stdin ends or a signal asks to stop. Returns the exit code."""
-		wake_r, wake_w = os.pipe()
-		os.set_blocking(wake_w, False)
-		os.set_blocking(wake_r, False)
-		self.wake_w = wake_w
+		if WINDOWS:
+			# Bytes as they are: a text mode stdin or stdout would turn line ends around and end at a Ctrl-Z.
+			for fd in (self.stdin_fd, self.stdout_fd):
+				try:
+					msvcrt.setmode(fd, os.O_BINARY)
+				except OSError:
+					pass
 		writer = threading.Thread(target=self._write_loop, name="bgw-mcp-out", daemon=True)
-		writer.start()
 
 		def on_signal(_number, _frame):
 			self.stop = True
 
-		previous = signal.set_wakeup_fd(wake_w)
+		waiting = self.input = ThreadInput(self.stdin_fd) if self.threaded else PipeInput(self.stdin_fd)
+		writer.start()
 		for number in (signal.SIGTERM, signal.SIGINT):
 			signal.signal(number, on_signal)
 		pending = bytearray()
@@ -1924,21 +2255,9 @@ class McpServer:
 		drain = 0.0
 		try:
 			while not self.stop:
-				readable, _, _ = select.select([self.stdin_fd, wake_r], [], [], 1.0)
-				if wake_r in readable:
-					try:
-						os.read(wake_r, 64)
-					except OSError:
-						pass
+				chunk = waiting.next()
+				if chunk is None:
 					continue
-				if self.stdin_fd not in readable:
-					continue
-				try:
-					chunk = os.read(self.stdin_fd, 65536)
-				except BlockingIOError:
-					continue
-				except OSError:
-					chunk = b""
 				if chunk == b"":
 					# The client closed stdin: calls that are nearly done may still answer.
 					drain = MCP_EOF_DRAIN_S
@@ -1973,10 +2292,8 @@ class McpServer:
 				pass
 			# A writer that is stuck on a client that does not read is left behind: it holds nothing but its thread.
 			writer.join(0.5)
-			signal.set_wakeup_fd(previous)
-			self.wake_w = None
-			os.close(wake_r)
-			os.close(wake_w)
+			self.input = None
+			waiting.close()
 		return EXIT_OK
 
 	def _shutdown(self, drain):
@@ -2003,19 +2320,53 @@ def cmd_mcp(args) -> int:
 	return McpServer().run()
 
 
+# What cmd.exe makes something of outside quotes: an argument with any of these (or a space or a tab) is quoted.
+CMD_SPECIAL = '&^%!()|<>";'
+
+
+def windows_command_line(argv: list) -> str:
+	"""argv as one command line for cmd.exe, quoted the way the Microsoft C runtime takes a command line apart (for
+	what needs no quotes for cmd.exe, the rules of the standard library's list2cmdline, which a test compares): quotes
+	around an empty argument and around one with a space, a tab or a character cmd.exe acts on (CMD_SPECIAL), a quote
+	in an argument escaped, the backslashes in front of it and at the end doubled. cmd.exe still expands %NAME%
+	between quotes: cmd_mcp_config says so where an argument holds a %."""
+	parts = []
+	for arg in argv:
+		text = re.sub(r'(\\*)"', lambda m: m.group(1) * 2 + '\\"', arg)
+		if arg == "" or " " in arg or "\t" in arg or any(c in arg for c in CMD_SPECIAL):
+			text = '"' + re.sub(r"(\\*)\Z", lambda m: m.group(1) * 2, text) + '"'
+		parts.append(text)
+	return " ".join(parts)
+
+
+def mcp_registration(script: str) -> tuple:
+	"""How "bgw mcp" is registered in Claude Code: (the claude mcp add command line, the entry of ~/.claude.json).
+
+	Windows: this Python (sys.executable: "py -3" is the launcher, not a Python), and BGW_ON_DEMAND=1 in the
+	entry, so that the first tool call starts the daemon (Windows has no service that holds the port for it).
+	"""
+	if WINDOWS:
+		python = sys.executable or "python"
+		argv = ["claude", "mcp", "add", "--scope", "user", "-e", "%s=1" % ON_DEMAND_ENV, "browser-gateway", "--", python, script, "mcp"]
+		return windows_command_line(argv), {"type": "stdio", "command": python, "args": [script, "mcp"], "env": {ON_DEMAND_ENV: "1"}}
+	argv = ["claude", "mcp", "add", "--scope", "user", "browser-gateway", "--", "python3", script, "mcp"]
+	return " ".join(shlex.quote(a) for a in argv), {"type": "stdio", "command": "python3", "args": [script, "mcp"]}
+
+
 def cmd_mcp_config(args) -> int:
 	"""Say how to register "bgw mcp" in Claude Code. Prints only: no configuration is read or changed."""
-	script = script_path()
-	argv = ["claude", "mcp", "add", "--scope", "user", "browser-gateway", "--", "python3", script, "mcp"]
-	entry = {"type": "stdio", "command": "python3", "args": [script, "mcp"]}
+	command, entry = mcp_registration(script_path())
 	if args.json:
-		dump({"name": "browser-gateway", "command": " ".join(shlex.quote(a) for a in argv), "config": entry})
+		dump({"name": "browser-gateway", "command": command, "config": entry})
 		return EXIT_OK
-	print("Register the gateway in Claude Code (user scope), in a shell:")
+	print("Register the gateway in Claude Code (user scope), in a %s:" % ("command prompt" if WINDOWS else "shell"))
 	print()
-	print("  " + " ".join(shlex.quote(a) for a in argv))
+	print("  " + command)
 	print()
-	print('Or add this entry by hand under "mcpServers" in ~/.claude.json, named "browser-gateway":')
+	if WINDOWS and "%" in command:
+		print("Note: a path above holds a %, which cmd.exe expands even between quotes: use the JSON entry below instead.")
+		print()
+	print('Or add this entry by hand under "mcpServers" in ~/.claude.json, named "browser-gateway"%s:' % (" (~ is your user profile folder)" if WINDOWS else ""))
 	print()
 	print("  " + json.dumps(entry))
 	print()
@@ -2076,7 +2427,7 @@ def build_parser():
 	p = sub.add_parser("export", help="write the stored content of a page (needs admin.token), or the bytes of a retrieved file, exactly as stored, to a file (never printed)")
 	p.add_argument("page", metavar="id", help="page id (pg_...) or file id (fl_...) from a fetch result")
 	p.add_argument("--format", choices=["markdown", "text", "html", "raw_html"], default=None, help="which stored form of a page; needed for a page, not allowed for a file")
-	p.add_argument("-o", "--output", default=None, metavar="FILE", help="file to create (mode 0600); an existing file is not overwritten. Needed for a page. Without it a file (fl_...) goes into the export directory (BGW_DOWNLOAD_DIR, default ~/.local/share/browser-gateway/exports) as <id> and an ending by its kind")
+	p.add_argument("-o", "--output", default=None, metavar="FILE", help="file to create (mode 0600); an existing file is not overwritten. Needed for a page. Without it a file (fl_...) goes into the export directory (BGW_DOWNLOAD_DIR, default ~/.local/share/browser-gateway/exports, on Windows %%LOCALAPPDATA%%\\browser-gateway\\data\\exports) as <id> and an ending by its kind")
 	p.add_argument("--force", action="store_true", help="replace FILE if it exists (with -o only)")
 	p.add_argument("--json", action="store_true", help="print the result as JSON")
 	p.set_defaults(func=cmd_export, parser=p)

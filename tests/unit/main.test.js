@@ -47,7 +47,7 @@ function healthz(port) {
 	});
 }
 
-test("main.js: starts from the environment, serves, and stops cleanly on SIGTERM", async () => {
+test("main.js: starts from the environment, serves, and stops cleanly on SIGTERM", { skip: process.platform === "win32" ? "SIGTERM and mode bits" : false }, async () => {
 	const dir = makeTempDir("main");
 	dirs.push(dir);
 	const configDir = path.join(dir, "config");
@@ -93,7 +93,7 @@ test("main.js: starts from the environment, serves, and stops cleanly on SIGTERM
 	}
 });
 
-test("main.js: an exception or a rejection that nothing catches is one line without its message, and exit code 1", async () => {
+test("main.js: an exception or a rejection that nothing catches is one line without its message, and exit code 1", { skip: process.platform === "win32" ? "SIGUSR2" : false }, async () => {
 	/** @type {[string, string][]} */
 	const cases = [
 		["uncaught_exception", 'process.on("SIGUSR2",()=>{throw new TypeError("PAGETEXT https://private.example/inbox")})'],
@@ -247,7 +247,7 @@ test("main.js: a config.json that cannot be used is exit code 2, with the reason
 	assert.deepEqual(fs.readdirSync(configDir), ["config.json"]);
 });
 
-test("main.js: socket activation - it serves on the socket systemd hands over", async () => {
+test("main.js: socket activation - it serves on the socket systemd hands over", { skip: process.platform === "win32" ? "systemd socket activation" : false }, async () => {
 	const dir = makeTempDir("main-activated");
 	dirs.push(dir);
 	const proc = runActivated({ BGW_CONFIG_DIR: path.join(dir, "config"), BGW_DATA_DIR: path.join(dir, "data") });
@@ -268,7 +268,7 @@ test("main.js: socket activation - it serves on the socket systemd hands over", 
 	}
 });
 
-test("main.js: a handed-over socket that is not 127.0.0.1:<port> is refused with exit code 4", async () => {
+test("main.js: a handed-over socket that is not 127.0.0.1:<port> is refused with exit code 4", { skip: process.platform === "win32" ? "systemd socket activation" : false }, async () => {
 	const dir = makeTempDir("main-badsocket");
 	dirs.push(dir);
 	const env = { BGW_CONFIG_DIR: path.join(dir, "config"), BGW_DATA_DIR: path.join(dir, "data") };
@@ -356,7 +356,7 @@ test("main.js: the handshake proofs name the port of BGW_PORT, whatever it is", 
 	}
 });
 
-test("main.js: socket activation - the handshake proofs name the port of the socket that was handed over", async () => {
+test("main.js: socket activation - the handshake proofs name the port of the socket that was handed over", { skip: process.platform === "win32" ? "systemd socket activation" : false }, async () => {
 	const dir = makeTempDir("main-activated-port");
 	dirs.push(dir);
 	const { configDir, key } = pairedConfig(dir);
@@ -372,7 +372,7 @@ test("main.js: socket activation - the handshake proofs name the port of the soc
 	}
 });
 
-test("main.js: LISTEN_FDS meant for another process is ignored", async () => {
+test("main.js: LISTEN_FDS meant for another process is ignored", { skip: process.platform === "win32" ? "systemd socket activation" : false }, async () => {
 	const dir = makeTempDir("main-foreignfds");
 	dirs.push(dir);
 	// A parent that was socket-activated itself leaves these variables behind.

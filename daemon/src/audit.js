@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { ensurePrivateDir, openPrivateFile, syncDir } from "./config.js";
+import { ensurePrivateDir, openPrivateFile, removeLeftover, removeWithRetry, renameWithRetry, syncDir } from "./config.js";
 import { SNIFFED_TYPES } from "../../extension/shared/sniff.js";
 
 /**
@@ -203,7 +203,7 @@ export class AuditLog {
 	#rotate() {
 		const bytes = this.#size;
 		this.#closeFile();
-		fs.renameSync(this.file, this.rotated);
+		renameWithRetry(this.file, this.rotated);
 		syncDir(this.dataDir);
 		this.#openFile();
 		this.#log.info("audit.rotated", { bytes });
@@ -327,6 +327,8 @@ export class AuditLog {
 	#purgeFile(file, cutoff, live) {
 		const source = openPrivateFile(file);
 		if (source === null) return 0;
+		// The file that is read stays open up to the end, but on Windows (see below).
+		let sourceOpen = true;
 		const tmp = `${file}.${crypto.randomBytes(6).toString("hex")}.tmp`;
 		/** @type {{ fd: number | null }} where the entries that stay are written, from the first one that goes on */
 		const out = { fd: null };
@@ -393,16 +395,23 @@ export class AuditLog {
 			// A last line without its end is what a write left that was cut off: it is kept or dropped like any other.
 			if (rest.length > 0) take(rest);
 			if (out.fd === null) return 0;
+			if (process.platform === "win32") {
+				// Windows does not remove a file that is open, nor put another in its place: whatever holds it lets go
+				// first. All of it has been read.
+				fs.closeSync(source.fd);
+				sourceOpen = false;
+				if (live) this.#closeFile();
+			}
 			if (keptBytes === 0 && !live) {
 				// Nothing of the file that was set aside is young enough: it goes as a whole.
-				fs.rmSync(file, { force: true });
+				removeWithRetry(file, { force: true });
 				syncDir(this.dataDir);
 				return dropped;
 			}
 			fs.fsyncSync(out.fd);
 			fs.closeSync(out.fd);
 			out.fd = null;
-			fs.renameSync(tmp, file);
+			renameWithRetry(tmp, file);
 			syncDir(this.dataDir);
 			if (live) {
 				// The descriptor still names the file that was replaced: from here on the new one is written.
@@ -413,8 +422,8 @@ export class AuditLog {
 		} finally {
 			if (out.fd !== null) fs.closeSync(out.fd);
 			// Gone already where it took the place of the file; a leftover of anything that went wrong otherwise.
-			fs.rmSync(tmp, { force: true });
-			fs.closeSync(source.fd);
+			removeLeftover(tmp, { force: true });
+			if (sourceOpen) fs.closeSync(source.fd);
 		}
 	}
 

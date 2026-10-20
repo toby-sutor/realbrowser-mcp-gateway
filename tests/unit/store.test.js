@@ -9,6 +9,9 @@ import { FakeClock } from "../helpers/fake-clock.js";
 import { counterBytes, makeRecord, openStore, quietLog } from "../helpers/pages.js";
 import { zeroTimings } from "../../extension/shared/protocol.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 const MIN = 60000;
 
 /** @param {string} p */
@@ -38,7 +41,7 @@ test("page ids are pg_ + 26 Crockford chars and encode the time", () => {
 	assert.throws(() => newPageId(1, () => new Uint8Array(3)), RangeError);
 });
 
-test("layout and modes: dirs 0700, files 0600, no temp leftovers", (t) => {
+test("layout and modes: dirs 0700, files 0600, no temp leftovers", { skip: process.platform === "win32" ? "mode bits" : false }, (t) => {
 	const { dir, store } = openStore(t);
 	const { id, meta } = store.save(makeRecord());
 	assert.match(id, PAGE_ID_RE);
@@ -103,7 +106,7 @@ test("the visible text is stored next to the Markdown, with the facts of the ext
 	const { id, meta } = store.save(makeRecord({ ...THREAD, extraction, truncated: { markdown: false, text: true, html: false, raw_html: false } }));
 	const pd = pageDir(dir, id);
 	assert.deepEqual(fs.readdirSync(pd).sort(), ["content.md", "content.txt", "links.json", "meta.json", "page.html.gz"]);
-	assert.equal(mode(path.join(pd, "content.txt")), 0o600);
+	if (MODES) assert.equal(mode(path.join(pd, "content.txt")), 0o600);
 	assert.equal(fs.readFileSync(path.join(pd, "content.txt"), "utf8"), THREAD.text);
 	assert.equal(store.readBody(id, "text"), THREAD.text);
 	assert.equal(store.readBody(id, "markdown"), THREAD.markdown);
@@ -168,19 +171,22 @@ test("search looks through the richer of the two texts, and still does after a r
 	assert.deepEqual(fresh.rebuildIndex(), { pages: 2, stored: 2, skipped: 0, files: 0 });
 	check(fresh);
 	assert.equal(fresh.readBody(thread.id, "text"), THREAD.text);
-	// A text file that is gone leaves the Markdown to be searched; one that is a symlink is not read through.
-	fs.rmSync(path.join(pageDir(dir, thread.id), "content.txt"));
-	fs.symlinkSync("/etc/hostname", path.join(pageDir(dir, article.id), "content.txt.lnk"));
-	fresh.rebuildIndex();
-	assert.deepEqual(fresh.search("FORUMREPLYTWO"), []);
-	assert.deepEqual(fresh.search("FORUMOP").map((h) => h.id), [thread.id]);
-	assert.equal(fresh.readBody(thread.id, "text"), null);
-	const outside = path.join(dir, "outside.txt");
-	fs.writeFileSync(outside, "SECRETOUTSIDE");
-	fs.symlinkSync(outside, path.join(pageDir(dir, thread.id), "content.txt"));
-	assert.equal(fresh.readBody(thread.id, "text"), null, "never through a symlink");
-	fresh.rebuildIndex();
-	assert.deepEqual(fresh.search("SECRETOUTSIDE"), []);
+	// Windows makes no symlink without a privilege.
+	if (process.platform !== "win32") {
+		// A text file that is gone leaves the Markdown to be searched; one that is a symlink is not read through.
+		fs.rmSync(path.join(pageDir(dir, thread.id), "content.txt"));
+		fs.symlinkSync("/etc/hostname", path.join(pageDir(dir, article.id), "content.txt.lnk"));
+		fresh.rebuildIndex();
+		assert.deepEqual(fresh.search("FORUMREPLYTWO"), []);
+		assert.deepEqual(fresh.search("FORUMOP").map((h) => h.id), [thread.id]);
+		assert.equal(fresh.readBody(thread.id, "text"), null);
+		const outside = path.join(dir, "outside.txt");
+		fs.writeFileSync(outside, "SECRETOUTSIDE");
+		fs.symlinkSync(outside, path.join(pageDir(dir, thread.id), "content.txt"));
+		assert.equal(fresh.readBody(thread.id, "text"), null, "never through a symlink");
+		fresh.rebuildIndex();
+		assert.deepEqual(fresh.search("SECRETOUTSIDE"), []);
+	}
 });
 
 test("bodies round-trip: markdown with multi-byte text, html, links", (t) => {
@@ -571,7 +577,7 @@ test("id validation rejects anything but pg_ + 26 Crockford chars", (t) => {
 	assert.ok(fs.existsSync(pageDir(dir, id)));
 });
 
-test("a symlinked page dir or file is never read through", (t) => {
+test("a symlinked page dir or file is never read through", { skip: process.platform === "win32" ? "symlinks" : false }, (t) => {
 	const { dir, store } = openStore(t);
 	const { id } = store.save(makeRecord());
 	const outside = makeTempDir("outside");
@@ -625,7 +631,7 @@ test("purge removes the row when the directory is already gone", (t) => {
 	assert.equal(store.stats().pages, 0);
 });
 
-test("purge never follows symlinks: page dir, shard dir, entries inside", (t) => {
+test("purge never follows symlinks: page dir, shard dir, entries inside", { skip: process.platform === "win32" ? "symlinks" : false }, (t) => {
 	const { dir, clock, store, log } = openStore(t);
 	const outside = makeTempDir("outside");
 	t.after(() => removeTempDir(outside));
@@ -774,7 +780,7 @@ test("a closed store refuses work; close is idempotent", (t) => {
 	assert.throws(() => store.search("x"), StoreError);
 });
 
-test("reopening an existing data dir keeps pages and tightens nothing it should not", (t) => {
+test("reopening an existing data dir keeps pages and tightens nothing it should not", { skip: process.platform === "win32" ? "mode bits" : false }, (t) => {
 	const dir = makeTempDir("reopen");
 	t.after(() => removeTempDir(dir));
 	const clock = new FakeClock();
@@ -794,7 +800,7 @@ test("raw HTML: raw.html.gz next to the other files, read back exactly, not inde
 	const raw = "<!DOCTYPE html>\n<html><head><script>var k = \"RAWSECRETWORD\";</script></head><body><!-- RAWCOMMENT -->\u00e4\u00f6\u00fc \u65e5\u672c\u8a9e \u{1f600}\u200b<p hidden>hid</p>\r\n</body></html>";
 	const { id, meta } = store.save(makeRecord({ raw_html: raw, truncated: { markdown: false, text: false, html: false, raw_html: true } }));
 	assert.deepEqual(fs.readdirSync(pageDir(dir, id)).sort(), ["content.md", "links.json", "meta.json", "page.html.gz", "raw.html.gz"]);
-	assert.equal(mode(path.join(pageDir(dir, id), "raw.html.gz")), 0o600);
+	if (MODES) assert.equal(mode(path.join(pageDir(dir, id), "raw.html.gz")), 0o600);
 	assert.equal(store.readBody(id, "raw_html"), raw, "every character, the zero-width one and the CRLF included");
 	assert.equal(store.readBody(id, "html"), makeRecord().html, "the cleaned document is a file of its own");
 	assert.equal(/** @type {any} */ (meta).truncated.raw_html, true);
@@ -1011,7 +1017,7 @@ test("recoverIndex: an index without a row over directories that hold pages is r
 	assert.ok(!log.events.includes("store.bad_meta"));
 });
 
-test("purge removes directories the index does not know once they are older than the retention by their id, and leaves younger ones", (t) => {
+test("purge removes directories the index does not know once they are older than the retention by their id, and leaves younger ones", { skip: process.platform === "win32" ? "symlinks" : false }, (t) => {
 	const { dir, clock, store, log } = openStore(t);
 	const old = store.save(makeRecord({ url: "https://example.com/old" }));
 	const oldLinked = store.save(makeRecord({ url: "https://example.com/old-linked" }));

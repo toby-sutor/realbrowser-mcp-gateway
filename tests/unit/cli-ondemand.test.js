@@ -23,6 +23,8 @@ const REPO = fs.realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
 const CLI = path.join(REPO, "cli", "bgw");
 const INSTALL = path.join(REPO, "tools", "install.sh");
 const PYTHON = process.env.PYTHON || "python3";
+/** Which daemons run, and that each test leaves none, is read from /proc. On Windows: cli-windows.test.js. */
+const PROC = process.platform === "win32" ? "reads /proc to see which daemons run" : false;
 const SOURCE = fs.readFileSync(CLI, "utf8");
 const INIT = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test-client", version: "1" } };
 
@@ -182,7 +184,7 @@ async function connectLater(g, ext, afterMs) {
 
 // ---------------------------------------------------------------- the switch
 
-test("the switch: off by default, on with the marker file or BGW_ON_DEMAND=1, off again with BGW_ON_DEMAND=0; the start is the one of bgw daemon start", async () => {
+test("the switch: off by default, on with the marker file or BGW_ON_DEMAND=1, off again with BGW_ON_DEMAND=0; the start is the one of bgw daemon start", { skip: PROC }, async () => {
 	const g = await scratch();
 	const down = `bgw: daemon is not running on 127.0.0.1:${g.port} (connection refused)\n`;
 	// Tokens first, so that "no token" is not what the commands below report.
@@ -240,7 +242,7 @@ test("the switch: off by default, on with the marker file or BGW_ON_DEMAND=1, of
 	assert.equal(started(g), false);
 });
 
-test("the marker is looked for in the literal ~/.config/browser-gateway (never XDG_CONFIG_HOME), and tools/install.sh on-demand writes the file the clients read", async () => {
+test("the marker is looked for in the literal ~/.config/browser-gateway (never XDG_CONFIG_HOME), and tools/install.sh on-demand writes the file the clients read", { skip: PROC }, async () => {
 	const g = await scratch();
 	// No BGW_CONFIG_DIR, no token variables: everything by the home directory, as on a machine as it comes.
 	const home = path.join(g.dir, "home");
@@ -286,7 +288,7 @@ test("the marker is looked for in the literal ~/.config/browser-gateway (never X
 
 // ---------------------------------------------------------------- which commands
 
-test("status, doctor, debug-job, daemon status and mcp-config start nothing: they say that the daemon is down and who will start it", async () => {
+test("status, doctor, debug-job, daemon status and mcp-config start nothing: they say that the daemon is down and who will start it", { skip: PROC }, async () => {
 	const g = await scratch();
 	assert.equal((await bgw(["daemon", "start"], g.env)).code, 0);
 	await stop(g);
@@ -320,7 +322,7 @@ test("status, doctor, debug-job, daemon status and mcp-config start nothing: the
 	assert.match(SOURCE, /^STARTS_DAEMON = \{cmd_fetch: "client", cmd_search: "client", cmd_open: "admin", cmd_read: None, cmd_pages: None, cmd_export: None, cmd_pair: None, cmd_pending: None\}$/m);
 });
 
-test("fetch, search, read, pages, export, pair, pending and open each start the daemon, and carry on as if it had been running", async () => {
+test("fetch, search, read, pages, export, pair, pending and open each start the daemon, and carry on as if it had been running", { skip: PROC }, async () => {
 	const g = await scratch();
 	const env = { ...g.env, ...ON };
 	/** @type {[string[], number, RegExp][]} the command, its exit code against a daemon without an extension, and what it prints */
@@ -351,7 +353,7 @@ test("fetch, search, read, pages, export, pair, pending and open each start the 
 
 // ---------------------------------------------------------------- only a refused connection
 
-test("something else on the port: nothing is started, the proof fails as always and no token is sent - the CLI and bgw mcp alike", async () => {
+test("something else on the port: nothing is started, the proof fails as always and no token is sent - the CLI and bgw mcp alike", { skip: PROC }, async () => {
 	const g = await scratch();
 	assert.equal((await bgw(["daemon", "start"], g.env)).code, 0);
 	await stop(g);
@@ -398,7 +400,7 @@ test("something else on the port: nothing is started, the proof fails as always 
 	assert.equal(fs.existsSync(g.dataDir), false);
 });
 
-test("a start that fails is reported in the controller's words and the command exits 1; bgw mcp answers with an error result and tries again next time", async () => {
+test("a start that fails is reported in the controller's words and the command exits 1; bgw mcp answers with an error result and tries again next time", { skip: PROC }, async () => {
 	const g = await scratch();
 	const env = { ...g.env, ...ON };
 	// A config file the daemon refuses: it ends at once.
@@ -434,7 +436,7 @@ test("a start that fails is reported in the controller's words and the command e
 
 // ---------------------------------------------------------------- the browser extension
 
-test("after its own start a fetch waits for the extension to connect and then sends the job; with the daemon already running it never waits; a command that reads the store never waits", async () => {
+test("after its own start a fetch waits for the extension to connect and then sends the job; with the daemon already running it never waits; a command that reads the store never waits", { skip: PROC }, async () => {
 	const g = await scratch();
 	const env = { ...g.env, ...ON };
 	const ext = await paired(g);
@@ -471,7 +473,7 @@ test("after its own start a fetch waits for the extension to connect and then se
 	}
 });
 
-test("when the extension does not come, the job is sent after the wait and the daemon answers in its own words (with the wait cut short for the test)", async () => {
+test("when the extension does not come, the job is sent after the wait and the daemon answers in its own words (with the wait cut short for the test)", { skip: PROC }, async () => {
 	const g = await scratch();
 	await paired(g);
 	// The client as it is, with one number changed: how long it waits. Loaded as a module, then run as the command.
@@ -502,7 +504,7 @@ test("when the extension does not come, the job is sent after the wait and the d
 
 // ---------------------------------------------------------------- bgw mcp
 
-test("bgw mcp: the handshake and the tool list start nothing, a tool call starts the daemon, two calls at once start one, and only protocol messages go to stdout", async () => {
+test("bgw mcp: the handshake and the tool list start nothing, a tool call starts the daemon, two calls at once start one, and only protocol messages go to stdout", { skip: PROC }, async () => {
 	const g = await scratch();
 	const mcp = startMcp({ ...g.env, ...ON });
 	try {
@@ -539,7 +541,7 @@ test("bgw mcp: the handshake and the tool list start nothing, a tool call starts
 	await stop(g);
 });
 
-test("bgw mcp: after its own start browser_fetch waits for the extension, page_search and gateway_status do not; with the switch off a tool call starts nothing", async () => {
+test("bgw mcp: after its own start browser_fetch waits for the extension, page_search and gateway_status do not; with the switch off a tool call starts nothing", { skip: PROC }, async () => {
 	const g = await scratch();
 	const ext = await paired(g);
 	const off = startMcp(g.env);
@@ -583,7 +585,7 @@ test("bgw mcp: after its own start browser_fetch waits for the extension, page_s
 
 // ---------------------------------------------------------------- several at once
 
-test("several commands at the same moment start one daemon, and each of them gets its answer; the same for bgw daemon start", async () => {
+test("several commands at the same moment start one daemon, and each of them gets its answer; the same for bgw daemon start", { skip: PROC }, async () => {
 	const g = await scratch();
 	const env = { ...g.env, ...ON };
 	const results = await Promise.all(Array.from({ length: 5 }, () => bgw(["pages", "okapi"], env)));
@@ -608,7 +610,7 @@ test("several commands at the same moment start one daemon, and each of them get
 	assert.equal(fs.readdirSync(g.dataDir).filter((n) => n.includes("lock")).length, 0, "the lock leaves no file behind");
 });
 
-test("bgw mcp: a daemon it started on demand and that is stopped from elsewhere does not stay a zombie while the helper lives", async () => {
+test("bgw mcp: a daemon it started on demand and that is stopped from elsewhere does not stay a zombie while the helper lives", { skip: PROC }, async () => {
 	const g = await scratch();
 	const mcp = startMcp({ ...g.env, ...ON });
 	try {

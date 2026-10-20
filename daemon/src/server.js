@@ -2,7 +2,7 @@ import http from "node:http";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PACING, EXIT, LIMITS, checkPrivateDir, loadSettings } from "./config.js";
+import { DEFAULT_PACING, EXIT, LIMITS, checkPrivateDir, loadSettings, outsideUserProfile } from "./config.js";
 import { consoleLogger, createLogThrottle, systemClock } from "./log.js";
 import { Secrets } from "./secrets.js";
 import { AuditLog } from "./audit.js";
@@ -13,7 +13,7 @@ import { BlobAssembler } from "./blobs.js";
 import { FetchService } from "./fetchsvc.js";
 import { createMcp } from "./mcp.js";
 import { buildTools } from "./mcptools.js";
-import { createNotifier } from "./notify.js";
+import { createNotifier, desktopNotifications } from "./notify.js";
 import { createChallengeNotifier } from "./challenges.js";
 import { createHttpHandler } from "./http.js";
 import { makeEngines } from "./search.js";
@@ -42,6 +42,8 @@ const DAY_MS = 86400000;
  * @property {{ hostCooldownMs?: number, maxPerMinute?: number }} [notifyLimits] tests only: other limits for the notifier than its own
  * @property {Partial<import("./config.js").LoginPacing>} [loginPacing] tests only: another pace for pages read with the operator's login
  * @property {number} [challengeDelayMs] tests only: instead of notify.challenge_delay_s of config.json
+ * @property {NodeJS.Platform} [platform] tests only: the platform the notifier and the status are for
+ * @property {Record<string, string | undefined>} [env] tests only: the environment USERPROFILE is read from on Windows
  */
 
 /**
@@ -133,6 +135,12 @@ export async function start(opts) {
 	// The directory before anything in it is believed: config.json can name a program to run, so it is read only
 	// from a directory that is the current user's and closed to everyone else. Nothing is created here.
 	if (checkPrivateDir(configDir).tightened) log.warn("config.dir_mode_fixed", { dir: configDir });
+	// Windows checks no permissions of its own (no mode bits): a directory outside the user profile may lack its ACL.
+	for (const dir of new Set([configDir, dataDir])) {
+		if (outsideUserProfile(dir, opts.env ?? process.env, opts.platform ?? process.platform)) {
+			log.warn("config.dir_outside_profile", { dir, note: `${dir} is outside the user profile: its permissions are not checked on Windows` });
+		}
+	}
 	// Then the settings, so that a config.json that cannot be used stops the start before anything is created.
 	const policy = { blocklist: opts.blocklist, allowLoopbackPorts: opts.allowLoopbackPorts ?? [] };
 	const settings = loadSettings(configDir, (file) => log.warn("config.file_mode_fixed", { file }), policy);
@@ -176,6 +184,7 @@ export async function start(opts) {
 		sound: settings.notify.sound !== false,
 		soundFile: typeof settings.notify.sound === "string" ? settings.notify.sound : null,
 		hookCommand: settings.notify.hookCommand,
+		...(opts.platform === undefined ? {} : { platform: opts.platform }),
 		...(opts.spawn === undefined ? {} : { spawn: opts.spawn }),
 		...opts.notifyLimits,
 	});
@@ -276,6 +285,9 @@ export async function start(opts) {
 			optin_rules: state === null ? 0 : state.optin_hosts.length,
 			store: storeStats(),
 			audit_ok: audit.ok,
+			// Where no desktop notification can be shown (Windows): a page that waits for the operator is only
+			// listed, and only the hook hears of it.
+			...(desktopNotifications(opts.platform) ? {} : { notifications: "unavailable" }),
 		};
 	};
 	/** For the operator. */

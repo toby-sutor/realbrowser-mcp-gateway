@@ -524,6 +524,48 @@ array without a shell, with only the host and a job id. The sound player and the
 hook are ended at a limit (15 and 10 seconds) and killed 2 seconds later. The hook
 runs with the first notification that is posted for a page.
 
+### On Windows
+
+Windows support is minimal, and it has not been used on a real Windows machine
+by the author. The unit tests run on Linux with the platform forced to Windows,
+a CI job runs them on Windows, and a Wine smoke test gives a weak signal. The
+controls above hold as written except for these:
+
+- **No mode or owner checks.** There is no 0600/0700 and no owner check. The
+  files rely on the default ACL of the user profile. A loosened ACL is not
+  detected. A config or data directory outside `%USERPROFILE%` is logged once
+  at start (`config.dir_outside_profile`), not refused.
+- **No-follow is emulated.** The check is lstat, open, then a comparison of
+  device and inode from fstat. A small race window remains; only something that
+  can already write in your profile can use it.
+- **Links are refused.** A config or data directory that is a symbolic link or a
+  junction is refused. This is stricter than on Linux. Only reparse points that
+  name another place (symbolic links, junctions) count as links, as in Node;
+  OneDrive placeholders and deduplicated files are plain files.
+- **`LOCALAPPDATA`** and the `BGW_*_DIR` / `BGW_*TOKEN_FILE` overrides must start
+  with a drive letter or be a UNC share.
+- **Stop is a hard kill** (TerminateProcess). The handle is opened with
+  terminate, limited query and synchronize access only, and creation time and
+  image are checked again on that handle before the kill, so a reused pid is
+  never ended. If a gateway still answers on the port afterwards (`node.exe`
+  was a launcher shim such as Volta), stop says so. Writes are temp file, fsync and
+  rename, and SQLite is journaled, so a kill leaves no half-written page, file
+  or token. The last line of the audit log may be cut short.
+- **The daemon is identified** by pid, creation time, the `node.exe` image path
+  and the checkout. The command line is not read, to avoid reading another
+  process's memory.
+- **Nothing holds the port while the daemon is down**, as with the plain-process
+  modes on Linux. The client proof step covers it.
+- **Exports are committed with a hard link**, which needs NTFS; elsewhere the
+  export fails with a message saying so.
+- **Exports get the Mark of the Web** (a `Zone.Identifier` stream, Internet
+  zone), so Windows warns before one is opened or run. Best effort: not on
+  file systems without alternate data streams.
+- **No desktop notifications.** Parked pages and `needs_human` still work, and the
+  hook still runs as an argv array without a shell.
+- **No systemd or container modes.** Only the plain process and the on-demand
+  start exist.
+
 ### Add-on permissions
 
 | Permission | Why |

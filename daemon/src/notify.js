@@ -33,6 +33,10 @@ import { parseIp } from "../../extension/shared/policy.js";
  * places for helper processes are all taken, the oldest notification is
  * closed and the new one takes its place.
  *
+ * Windows has none of this: no D-Bus, no helper, no sound player. There a post
+ * that passes the limits runs the operator's hook as everywhere, and ends at
+ * once as "unsupported", without starting anything else.
+ *
  * @typedef {import("./log.js").Logger} Logger
  * @typedef {import("./log.js").Clock} Clock
  *
@@ -68,9 +72,10 @@ import { parseIp } from "../../extension/shared/policy.js";
  * @property {boolean} [hook] false: do not run the operator hook for this post (a repeat of one that ran it)
  *
  * @typedef {object} NotifyResult
- * @property {string} why closed | action | max_wait | stdin_eof | signal | replaced | fallback | error, or for a post that
- *   was not made: cooldown (the site was notified about a moment ago) | busy (too many at once or per minute) |
- *   bad_host (the host named is neither a plain host name nor a bracketed IPv6 address)
+ * @property {string} why closed | action | max_wait | stdin_eof | signal | replaced | fallback | error | unsupported (the
+ *   platform shows no desktop notifications: only the hook ran), or for a post that was not made: cooldown (the site
+ *   was notified about a moment ago) | busy (too many at once or per minute) | bad_host (the host named is neither a
+ *   plain host name nor a bracketed IPv6 address)
  * @property {number | null} id notification id when one was posted
  * @property {boolean} clickable
  *
@@ -90,6 +95,7 @@ import { parseIp } from "../../extension/shared/policy.js";
  * @property {string} [python]
  * @property {string} [gdbus]
  * @property {string} [pwPlay]
+ * @property {NodeJS.Platform} [platform] default process.platform; on win32 nothing but the hook is started
  */
 
 export const MAX_LINE_BYTES = 8192;
@@ -304,6 +310,8 @@ export function createNotifier(options) {
 	const maxHelpers = options.maxHelpers ?? MAX_HELPERS;
 	const hostCooldownMs = options.hostCooldownMs ?? HOST_COOLDOWN_MS;
 	const maxPerMinute = options.maxPerMinute ?? MAX_PER_MINUTE;
+	const desktop = desktopNotifications(options.platform);
+	let unsupportedLogged = false;
 
 	/** @type {Set<NotifyHandle>} posts that were accepted and have not ended */
 	const active = new Set();
@@ -799,6 +807,18 @@ export function createNotifier(options) {
 			}
 			active.add(handle);
 			handle.done.then(() => active.delete(handle));
+			if (!desktop) {
+				if (opts.hook !== false) runHook(opts.host, opts.jobId);
+				if (!unsupportedLogged) {
+					unsupportedLogged = true;
+					log.info("notify.unsupported", { platform: options.platform ?? process.platform });
+				}
+				// A post that was made, and ended: so the caller counts its hook as run. Finished once the caller
+				// has it, as any post that went out.
+				handle.clickable = false;
+				queueMicrotask(() => handle.finish("unsupported"));
+				return handle;
+			}
 			live.set(opts.key, handle);
 			playSound(opts.sound === true ? undefined : opts.sound);
 			if (opts.hook !== false) runHook(opts.host, opts.jobId);
@@ -837,6 +857,15 @@ export function createNotifier(options) {
 			await Promise.all(mine.map((h) => h.close()));
 		},
 	};
+}
+
+/**
+ * Whether the platform shows desktop notifications at all: not Windows.
+ * @param {NodeJS.Platform} [platform]
+ * @returns {boolean}
+ */
+export function desktopNotifications(platform = process.platform) {
+	return platform !== "win32";
 }
 
 /** @param {unknown} err @returns {string} */

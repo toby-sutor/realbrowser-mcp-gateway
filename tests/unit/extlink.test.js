@@ -9,6 +9,9 @@ import { b64urlEncode, generatePairingCode, parsePairingCode, randomBytes, rando
 import { HANDSHAKE_CORE_SINCE, MSG, PROTOCOL_VERSION, makeMessage, zeroTimings } from "../../extension/shared/protocol.js";
 import { LIMITS } from "../../daemon/src/config.js";
 
+// Windows has no mode bits: what they are is checked where there are.
+const MODES = process.platform !== "win32";
+
 /**
  * @typedef {Awaited<ReturnType<typeof startTestDaemon>>} TestDaemon
  */
@@ -79,7 +82,7 @@ test("pair with a one-time code, then reconnect in auth mode", async () => {
 		// Both sides derived the same long-lived key; the daemon stored it 0600.
 		const keyFile = path.join(daemon.configDir, "ext.key");
 		assert.equal(fs.readFileSync(keyFile, "utf8").trim(), b64urlEncode(e.key));
-		assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
+		if (MODES) assert.equal(fs.statSync(keyFile).mode & 0o777, 0o600);
 
 		const ready = e.received.find((f) => f.type === MSG.READY);
 		assert.deepEqual(ready?.limits, { max_result_bytes: 8388608, ping_s: 20 });
@@ -1322,7 +1325,7 @@ test("job round trip through POST /v1/jobs", async () => {
 		const auditText = fs.readFileSync(path.join(daemon.dataDir, "audit.jsonl"), "utf8");
 		assert.ok(!auditText.includes("SECRETQUERY"), "redirect hops are logged as origins only");
 		assert.ok(!auditText.includes("hello world"), "no page content in the audit log");
-		assert.equal(fs.statSync(path.join(daemon.dataDir, "audit.jsonl")).mode & 0o777, 0o600);
+		if (MODES) assert.equal(fs.statSync(path.join(daemon.dataDir, "audit.jsonl")).mode & 0o777, 0o600);
 		assert.ok(!daemon.logs.join("\n").includes("hello world"), "no page content in the journal");
 		assert.deepEqual((await daemon.status()).queue, { queued: 0, dispatched: 0 });
 	});

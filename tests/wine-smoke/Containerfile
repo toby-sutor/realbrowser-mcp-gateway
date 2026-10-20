@@ -1,0 +1,38 @@
+# Wine smoke-test image for the Windows port. Weak signal only: Wine is not Windows.
+FROM docker.io/library/debian:stable-slim
+
+ARG NODE_VERSION=26.12.0
+# From https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt
+ARG NODE_SHA256=50efaf01a08c520b4bbe499c09a8c5a5c370002c419c0d9da2c6815d3066a453
+ARG PYTHON_VERSION=3.13.16
+# Matches the CPython entry of python-${PYTHON_VERSION}-embed-amd64.zip.spdx.json on python.org
+ARG PYTHON_SHA256=97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    WINEARCH=win64 \
+    WINEPREFIX=/opt/wineprefix \
+    WINEDEBUG=-all \
+    WINEDLLOVERRIDES=mscoree,mshtml=
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends wine wine64 xvfb xauth xdotool ca-certificates curl unzip procps \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN set -eu; \
+    d=$(mktemp -d); \
+    curl -fsSL -o "$d/node.zip" "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-win-x64.zip"; \
+    echo "${NODE_SHA256}  $d/node.zip" | sha256sum -c -; \
+    mkdir -p /opt/node-x; unzip -q "$d/node.zip" -d /opt/node-x; \
+    mv "/opt/node-x/node-v${NODE_VERSION}-win-x64" /opt/node; rmdir /opt/node-x; rm -rf "$d"; \
+    d=$(mktemp -d); \
+    curl -fsSL -o "$d/py.zip" "https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip"; \
+    echo "${PYTHON_SHA256}  $d/py.zip" | sha256sum -c -; \
+    mkdir -p /opt/python; unzip -q "$d/py.zip" -d /opt/python; rm -rf "$d"; \
+    # Enable site; the repo copy lives at Z:\work\repo (smoke.sh puts it there).
+    f=$(ls /opt/python/python3*._pth); \
+    sed -i 's/^#import site/import site/' "$f"; \
+    printf '%s\n' 'Z:\work\repo\cli' >> "$f"; \
+    grep -q '^import site' "$f"
+
+# Create the prefix once at build time.
+RUN xvfb-run -a wineboot --init; wineserver -w || true

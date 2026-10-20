@@ -27,6 +27,7 @@ const REAL_PLACES = [".local/share/browser-gateway", ".config/browser-gateway", 
 
 /** @returns {string | false} why the tests cannot run here */
 function skipReason() {
+	if (process.platform === "win32") return "POSIX shell scripts and systemd only";
 	for (const tool of ["git", "python3", "sh", "tar"]) {
 		if (spawnSync(tool, ["--version"], { stdio: "ignore" }).error !== undefined) return `${tool} is not available`;
 	}

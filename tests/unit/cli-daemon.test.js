@@ -16,11 +16,16 @@ import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, removeTempDir } from "../helpers/tmp.js";
 import { closedPort, squatter } from "../helpers/squatter.js";
+import { SYSTEM_ENV } from "../helpers/mcp-stdio.js";
 
 const REPO = fs.realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
 const CLI = path.join(REPO, "cli", "bgw");
 const AUTOSTART = path.join(REPO, "tools", "autostart.sh");
 const PYTHON = process.env.PYTHON || "python3";
+/** What only Linux or POSIX has: /proc, sh and the desktop autostart, mode bits and a shell script standing in for node. */
+const PROC = process.platform === "win32" ? "reads /proc" : false;
+const SH = process.platform === "win32" ? "tools/autostart.sh is a POSIX sh script for a Linux desktop" : false;
+const POSIX_ONLY = process.platform === "win32" ? "mode bits, and a sh script standing in for node" : false;
 
 /** @type {string} */
 let tmp;
@@ -76,6 +81,7 @@ async function scratch() {
 		env: {
 			PATH: process.env.PATH ?? "/usr/bin:/bin",
 			HOME: path.join(dir, "home"),
+			...SYSTEM_ENV,
 			BGW_URL: `http://127.0.0.1:${port}`,
 			BGW_CONFIG_DIR: configDir,
 			BGW_DATA_DIR: dataDir,
@@ -103,7 +109,7 @@ function bgw(args, env) {
 /** @param {string} dataDir @returns {any} */
 const record = (dataDir) => JSON.parse(fs.readFileSync(path.join(dataDir, "daemon.pid"), "utf8"));
 
-test("bgw daemon start, status, stop: a detached daemon from this checkout, one at most, and only that process is ever signalled", async () => {
+test("bgw daemon start, status, stop: a detached daemon from this checkout, one at most, and only that process is ever signalled", { skip: PROC }, async () => {
 	const g = await scratch();
 	const none = await bgw(["daemon", "status"], g.env);
 	assert.deepEqual([none.code, none.stdout, none.stderr], [1, "bgw daemon: not running\n", ""]);
@@ -198,7 +204,7 @@ test("bgw daemon start refuses a port that is taken, and leaves nothing behind w
 	assert.equal((await bgw(["daemon", "status"], g.env)).code, 1);
 });
 
-test("bgw daemon stop signals nothing it did not start: a reused pid, another program in this checkout, a pid file of another checkout, a file that is no pid file", async () => {
+test("bgw daemon stop signals nothing it did not start: a reused pid, another program in this checkout, a pid file of another checkout, a file that is no pid file", { skip: PROC }, async () => {
 	const g = await scratch();
 	fs.mkdirSync(g.dataDir, { mode: 0o700 });
 	const pidFile = path.join(g.dataDir, "daemon.pid");
@@ -272,7 +278,7 @@ function autostart(args, env) {
 	});
 }
 
-test("tools/autostart.sh writes one desktop entry that runs bgw daemon start, and removes only what it wrote", async () => {
+test("tools/autostart.sh writes one desktop entry that runs bgw daemon start, and removes only what it wrote", { skip: SH }, async () => {
 	const home = fs.mkdtempSync(path.join(tmp, "home-"));
 	const dir = path.join(home, "autostart dir");
 	const file = path.join(dir, "browser-gateway.desktop");
@@ -332,7 +338,7 @@ test("tools/autostart.sh writes one desktop entry that runs bgw daemon start, an
 	assert.equal((await autostart(["install"], { HOME: home, BGW_AUTOSTART_DIR: "relative" })).code, 2);
 });
 
-test("tools/autostart.sh: without the override it is ~/.config/autostart of the HOME it is given, never XDG_CONFIG_HOME, and a path with odd characters is quoted for the Exec line", async () => {
+test("tools/autostart.sh: without the override it is ~/.config/autostart of the HOME it is given, never XDG_CONFIG_HOME, and a path with odd characters is quoted for the Exec line", { skip: SH }, async () => {
 	const home = fs.mkdtempSync(path.join(tmp, "home2-"));
 	// A sandbox remaps XDG_CONFIG_HOME; the desktop reads the real ~/.config.
 	const r = await autostart(["install"], { HOME: home, XDG_CONFIG_HOME: path.join(home, "remapped") });
@@ -359,7 +365,7 @@ test("tools/autostart.sh: without the override it is ~/.config/autostart of the 
 
 // With a line break in the path of the checkout the quoting failed inside the here-document,
 // where its exit ended only a subshell: a broken Exec line was written, install said "wrote", status said "installed".
-test("tools/autostart.sh: a checkout whose path cannot stand in a desktop entry writes nothing and exits non-zero, and status never calls a broken entry correct", async () => {
+test("tools/autostart.sh: a checkout whose path cannot stand in a desktop entry writes nothing and exits non-zero, and status never calls a broken entry correct", { skip: SH }, async () => {
 	const home = fs.mkdtempSync(path.join(tmp, "home3-"));
 	/** @param {string} script @param {string[]} args @param {string} dir */
 	const run = (script, args, dir) =>
@@ -446,7 +452,7 @@ function withController(code, env = { PATH: process.env.PATH ?? "/usr/bin:/bin" 
 	});
 }
 
-test("the pid file is put in place whole: never empty or half written, never over another, and nothing is left when it fails", async () => {
+test("the pid file is put in place whole: never empty or half written, never over another, and nothing is left when it fails", { skip: POSIX_ONLY }, async () => {
 	const g = await scratch();
 	fs.mkdirSync(g.dataDir, { mode: 0o700 });
 	const pidFile = path.join(g.dataDir, "daemon.pid");
@@ -515,7 +521,7 @@ test("bgw daemon stop and status say what an empty or damaged pid file means; an
 	}
 });
 
-test("bgw daemon start: Python before 3.9 is refused in one line, and a node found through a relative PATH entry is not run", async () => {
+test("bgw daemon start: Python before 3.9 is refused in one line, and a node found through a relative PATH entry is not run", { skip: POSIX_ONLY }, async () => {
 	const g = await scratch();
 	const old = await withController(`sys.version_info = (3, 8, 10, "final", 0)\nsys.exit(ctl.run("start", ${g.port}, ${JSON.stringify(CLI)}))`, g.env);
 	assert.equal(old.code, 1);
