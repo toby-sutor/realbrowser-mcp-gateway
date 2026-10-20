@@ -497,6 +497,29 @@ What you trade: the gateway reads one page at a time and paces itself per site,
 so it is slower than a built-in fetch, and every load comes from your browser
 and your connection.
 
+Recommended for Claude Code: allow the reading tools, so that they do not ask
+for permission on every page (in plan mode as well). Add this to
+`~/.claude/settings.json` (on Windows `%USERPROFILE%\.claude\settings.json`),
+merged into a `permissions.allow` list that is already there:
+
+    {
+      "permissions": {
+        "allow": [
+          "mcp__browser-gateway__browser_fetch",
+          "mcp__browser-gateway__browser_search",
+          "mcp__browser-gateway__page_read",
+          "mcp__browser-gateway__page_search",
+          "mcp__browser-gateway__gateway_status"
+        ]
+      }
+    }
+
+Or add the same rules with `/permissions` in Claude Code. Leave `file_export`
+out: it is the one tool that writes a file from the web to your disk, and a
+question before that is worth having. With these rules any session can load any
+address in your browser without asking; the URL policy, the container and the
+pacing of the gateway still apply.
+
 ## The gateway window and what its state means
 
 Jobs run in one normal browser window, the gateway window, titled
